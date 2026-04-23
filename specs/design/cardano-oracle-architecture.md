@@ -1,6 +1,11 @@
-# Mini architecture (scratch)
+# Cardano Oracle Architecture
 
-Quick relevamiento for discussion. Not formal. Once we close the open points, this gets promoted into the official spec.
+This document is the single architecture reference for the Cardano port of DIA's push-oracle contracts. It defines the contract set, UTxO model, datums, transaction shapes, deployment sequence, and open items pending DIA confirmation.
+
+Reference inputs to this document:
+
+- [Cardano Integration Requirement [PF]](../requirements/cardano-integration-requirement-pf.md)
+- [Final Cardano Milestones](../milestones/final-cardano-milestones.md)
 
 ---
 
@@ -676,7 +681,7 @@ flowchart LR
 
 ---
 
-## 6. Open points to close before formalizing
+## 6. Open items pending DIA confirmation
 
 1. **Config shared vs inline.** Proposal: shared (one Config UTxO used as reference input by all Receivers). Alternative: duplicate signers, fee and domain inside each Receiver datum.
 2. **Fees.**
