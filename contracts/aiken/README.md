@@ -11,6 +11,7 @@ The current contract set follows the final Receiver-based architecture:
 - `payment_hook` mints and guards the global PaymentHook NFT and accumulates protocol fees.
 - `receiver` is compiled once per client and guards that client's prepaid fee balance.
 - `pair_state` is compiled once per client with that client's `receiver_hash`; each pair is a separate Pair NFT and Pair UTxO under the client-specific pair script.
+- `reference_holder` is the script address used for reference-script UTxOs. It rejects spend attempts so reference-script UTxOs are not spendable by the deploy wallet.
 
 There is no global pair allow-list. Pair identity is represented by the Pair NFT asset name, derived as `blake2b_256(pair_id)`, and client isolation comes from the Receiver-specific `pair_state` script hash.
 

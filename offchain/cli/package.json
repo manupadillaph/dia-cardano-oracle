@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx src/__tests__/run-tests.ts",
     "cli": "tsx src/index.ts"
   },
   "dependencies": {

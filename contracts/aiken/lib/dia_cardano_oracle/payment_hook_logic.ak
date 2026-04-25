@@ -131,6 +131,41 @@ test withdraw_transition_decrements_accrued_balance() {
   )
 }
 
+test fee_charge_transition_rejects_wrong_fee_amount() {
+  !fee_charge_transition(
+    sample_payment_hook(),
+    PaymentHookDatum {
+      withdraw_address: sample_payment_hook().withdraw_address,
+      accrued_fees_lovelace: 1_500_000,
+      lifetime_collected_lovelace: 1_500_000,
+      lifetime_withdrawn_lovelace:
+        sample_payment_hook().lifetime_withdrawn_lovelace,
+      min_utxo_lovelace: sample_payment_hook().min_utxo_lovelace,
+    },
+    2_000_000,
+  )
+}
+
+test withdraw_transition_rejects_above_accrued_fees() {
+  !withdraw_transition(
+    PaymentHookDatum {
+      withdraw_address: sample_payment_hook().withdraw_address,
+      accrued_fees_lovelace: 2_000_000,
+      lifetime_collected_lovelace: 5_000_000,
+      lifetime_withdrawn_lovelace: 1_000_000,
+      min_utxo_lovelace: sample_payment_hook().min_utxo_lovelace,
+    },
+    PaymentHookDatum {
+      withdraw_address: sample_payment_hook().withdraw_address,
+      accrued_fees_lovelace: -1_000_000,
+      lifetime_collected_lovelace: 5_000_000,
+      lifetime_withdrawn_lovelace: 4_000_000,
+      min_utxo_lovelace: sample_payment_hook().min_utxo_lovelace,
+    },
+    3_000_000,
+  )
+}
+
 pub fn sample_payment_hook() -> PaymentHookDatum {
   PaymentHookDatum {
     withdraw_address: sample_address(),

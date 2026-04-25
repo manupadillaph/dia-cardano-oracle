@@ -1,0 +1,14 @@
+{
+  "configAssetName": "4449415f434f4e464947",
+  "authorizedDiaPublicKeys": [
+    "03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807"
+  ],
+  "domain": {
+    "name": "DIA Oracle",
+    "version": "1.0",
+    "sourceChainId": "100640",
+    "verifyingContract": "0xF8c614A483A0427A13512F52ac72A576678bE317"
+  },
+  "protocolFeeLovelace": "2000000",
+  "minUtxoLovelace": "5000000"
+}

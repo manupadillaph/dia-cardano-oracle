@@ -1,0 +1,19 @@
+{
+  "domain": {
+    "name": "DIA Oracle",
+    "version": "1.0",
+    "sourceChainId": "100640",
+    "verifyingContract": "0xF8c614A483A0427A13512F52ac72A576678bE317"
+  },
+  "intent": {
+    "intentType": "OracleUpdate",
+    "version": "1.0",
+    "chainId": "100640",
+    "nonce": "1776186346664217710",
+    "expiry": "1779705275",
+    "symbol": "USDC/USD",
+    "price": "100045678",
+    "timestamp": "1777113276",
+    "source": "DIA Oracle"
+  }
+}

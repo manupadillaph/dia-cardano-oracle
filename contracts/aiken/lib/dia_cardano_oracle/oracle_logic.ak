@@ -292,6 +292,20 @@ test real_dia_signature_is_accepted() {
   has_valid_signature(sample_config(), sample_witness())
 }
 
+test negative_price_pair_state_is_rejected() {
+  !valid_pair_state(PairDatum { ..sample_pair_datum(), price: -1 })
+}
+
+test negative_price_intent_signature_is_rejected() {
+  !has_valid_signature(
+    sample_config(),
+    UpdateWitness {
+      ..sample_witness(),
+      intent: OracleIntent { ..sample_intent(), price: -1 },
+    },
+  )
+}
+
 test valid_initial_pair_datum_accepts_zero_initial_state() {
   valid_initial_pair_datum(
     sample_pair_datum().pair_id,
@@ -324,5 +338,84 @@ test next_pair_matches_witness_requires_fresh_data() {
     sample_pair_datum(),
     sample_config(),
     sample_witness(),
+  )
+}
+
+test stale_timestamp_is_rejected() {
+  let previous =
+    PairDatum {
+      ..sample_pair_datum(),
+      timestamp: sample_intent().timestamp,
+      nonce: sample_intent().nonce - 1,
+    }
+
+  !next_pair_matches_witness(
+    previous,
+    sample_pair_datum(),
+    sample_config(),
+    sample_witness(),
+  )
+}
+
+test stale_nonce_is_rejected() {
+  let previous =
+    PairDatum {
+      ..sample_pair_datum(),
+      timestamp: sample_intent().timestamp - 1,
+      nonce: sample_intent().nonce,
+    }
+
+  !next_pair_matches_witness(
+    previous,
+    sample_pair_datum(),
+    sample_config(),
+    sample_witness(),
+  )
+}
+
+test unauthorized_dia_signer_is_rejected() {
+  !has_valid_signature(
+    config_logic.ConfigDatum {
+      ..sample_config(),
+      authorized_dia_public_keys: [],
+    },
+    sample_witness(),
+  )
+}
+
+test wrong_pair_symbol_is_rejected() {
+  let next =
+    PairDatum {
+      ..sample_pair_datum(),
+      pair_id: #"4554482f555344",
+    }
+
+  !next_pair_matches_witness(
+    PairDatum {
+      ..sample_pair_datum(),
+      price: 99980000,
+      timestamp: sample_pair_datum().timestamp - 100,
+      nonce: sample_pair_datum().nonce - 10,
+    },
+    next,
+    sample_config(),
+    sample_witness(),
+  )
+}
+
+test wrong_pair_nft_is_rejected() {
+  !next_pair_matches_witness(
+    PairDatum {
+      ..sample_pair_datum(),
+      price: 99980000,
+      timestamp: sample_pair_datum().timestamp - 100,
+      nonce: sample_pair_datum().nonce - 10,
+    },
+    sample_pair_datum(),
+    sample_config(),
+    UpdateWitness {
+      ..sample_witness(),
+      pair_token_name: #"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    },
   )
 }

@@ -105,3 +105,25 @@ test pay_fee_transition_decrements_balance() {
     2_000_000,
   )
 }
+
+test pay_fee_transition_rejects_wrong_fee_amount() {
+  !pay_fee_transition(
+    sample_receiver(),
+    ReceiverDatum {
+      balance_lovelace: 8_500_000,
+      min_utxo_lovelace: sample_receiver().min_utxo_lovelace,
+    },
+    2_000_000,
+  )
+}
+
+test pay_fee_transition_rejects_balance_underflow() {
+  !pay_fee_transition(
+    sample_receiver(),
+    ReceiverDatum {
+      balance_lovelace: -1,
+      min_utxo_lovelace: sample_receiver().min_utxo_lovelace,
+    },
+    10_000_001,
+  )
+}

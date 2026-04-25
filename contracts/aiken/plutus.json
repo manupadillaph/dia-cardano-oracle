@@ -432,6 +432,31 @@
       "hash": "1b8e680901e04cfabf54d13791e63fa0e9b33c2875048d38745ad8c6"
     },
     {
+      "title": "reference_holder.reference_holder.spend",
+      "datum": {
+        "title": "_datum",
+        "schema": {
+          "$ref": "#/definitions/Data"
+        }
+      },
+      "redeemer": {
+        "title": "_redeemer",
+        "schema": {
+          "$ref": "#/definitions/Data"
+        }
+      },
+      "compiledCode": "585c01010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748008c01cdd500144c8cc892818050009805180580098041baa0028a50401830060013003375400d149a26cac8009",
+      "hash": "9c4937d9174a31cdbff5dd6cc3ad1041eecb17319baf6e5510c477df"
+    },
+    {
+      "title": "reference_holder.reference_holder.else",
+      "redeemer": {
+        "schema": {}
+      },
+      "compiledCode": "585c01010029800aba2aba1aab9eaab9dab9a4888896600264653001300600198031803800cc0180092225980099b8748008c01cdd500144c8cc892818050009805180580098041baa0028a50401830060013003375400d149a26cac8009",
+      "hash": "9c4937d9174a31cdbff5dd6cc3ad1041eecb17319baf6e5510c477df"
+    },
+    {
       "title": "update_coordinator.update_coordinator.withdraw",
       "redeemer": {
         "title": "redeemer",
@@ -482,6 +507,10 @@
   "definitions": {
     "ByteArray": {
       "dataType": "bytes"
+    },
+    "Data": {
+      "title": "Data",
+      "description": "Any Plutus data."
     },
     "Int": {
       "dataType": "integer"
