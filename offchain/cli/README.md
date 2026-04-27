@@ -21,8 +21,6 @@ The normal flow is:
 7. submit single or batch oracle updates
 8. run maintenance transactions
 
-There are no static example JSON files in the normal workflow anymore.
-
 ## Environment
 
 Create `.env` from `.env.example` and set:
@@ -34,7 +32,7 @@ Create `.env` from `.env.example` and set:
 - either `CARDANO_WALLET_SEED` or `CARDANO_PRIVATE_KEY`
 - optional `DIA_EVM_PRIVATE_KEY` for signing Preview EIP-712 oracle intents
 
-By default the CLI uses Blockfrost for UTxOs, protocol parameters, submission, and confirmation. Set `CARDANO_PROVIDER=Koios` to use Koios as the Lucid provider instead; protocol parameters are never mixed across providers.
+By default the CLI uses Blockfrost for UTxOs, protocol parameters, submission, and confirmation. Set `CARDANO_PROVIDER=Koios` to use Koios as the Lucid provider instead.
 
 ## Install
 
