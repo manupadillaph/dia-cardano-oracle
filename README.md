@@ -10,7 +10,6 @@ Project and delivery documents:
 
 - [Final Cardano Milestones](docs/milestones/final-cardano-milestones.md)
 - [Milestone 1 Preview Evidence](docs/milestones/milestone-1-preview-evidence.md)
-- [Work Plan](docs/plans/work-plan.md)
 - [Requirements](docs/requirements/cardano-integration-requirement-pf.md)
 
 Component docs:
@@ -23,9 +22,6 @@ Component docs:
 - `contracts/`: on-chain implementation
 - `offchain/`: off-chain components and operator tooling
 - `docs/`: architecture, milestones, requirements, plans, references
-- `e2e/`: end-to-end validation artifacts
-- `scripts/`: automation helpers
-- `infra/`: infrastructure artifacts
 
 ## Operator Workflow
 
