@@ -2,14 +2,15 @@ use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto.{ScriptHash}
 use cardano/address.{Credential, Script}
-use cardano/assets
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{InlineDatum, Input, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
 use dia_cardano_oracle/config_logic
 use dia_cardano_oracle/oracle_logic
 
 pub type PairMintAction {
-  BootstrapPair { pair_id: ByteArray }
+  MintPairs
 }
 
 pub type PairSpendAction {
@@ -22,9 +23,8 @@ validator pair_state(
   receiver_hash: ScriptHash,
 ) {
   mint(action: PairMintAction, policy_id: PolicyId, self: Transaction) {
-    let BootstrapPair { pair_id } = action
-
-    expect [Pair(asset_name, quantity)] =
+    let MintPairs = action
+    let minted_pairs =
       self.mint
         |> assets.tokens(policy_id)
         |> dict.to_pairs()
@@ -33,7 +33,11 @@ validator pair_state(
       list.find(
         self.reference_inputs,
         fn(input) {
-          assets.quantity_of(input.output.value, config_policy_id, config_asset_name) == 1
+          assets.quantity_of(
+            input.output.value,
+            config_policy_id,
+            config_asset_name,
+          ) == 1
         },
       )
 
@@ -41,11 +45,19 @@ validator pair_state(
     expect config_datum: config_logic.ConfigDatum = config_datum_data
 
     and {
-      quantity == 1,
-      asset_name == oracle_logic.pair_asset_name(pair_id),
+      list.length(minted_pairs) > 0,
+      list.all(
+        minted_pairs,
+        fn(minted_pair) {
+          let Pair(asset_name, quantity) = minted_pair
+          and {
+            quantity == 1,
+            has_pair_output(self.outputs, policy_id, asset_name),
+          }
+        },
+      ),
       config_logic.valid_config_state(config_datum),
-      config_logic.has_config_signer(config_datum, self),
-      has_valid_pair_bootstrap_output(self.outputs, policy_id, pair_id),
+      coordinator_witness_present(self.withdrawals, config_datum),
     }
   }
 
@@ -71,7 +83,11 @@ validator pair_state(
       list.find(
         self.reference_inputs,
         fn(input) {
-          assets.quantity_of(input.output.value, config_policy_id, config_asset_name) == 1
+          assets.quantity_of(
+            input.output.value,
+            config_policy_id,
+            config_asset_name,
+          ) == 1
         },
       )
 
@@ -110,13 +126,11 @@ validator pair_state(
   }
 }
 
-fn has_valid_pair_bootstrap_output(
+fn has_pair_output(
   outputs: List<Output>,
   pair_policy_id: PolicyId,
-  pair_id: ByteArray,
+  pair_asset_name: ByteArray,
 ) -> Bool {
-  let pair_asset_name = oracle_logic.pair_asset_name(pair_id)
-
   when
     list.find(
       outputs,
@@ -131,7 +145,8 @@ fn has_valid_pair_bootstrap_output(
           expect pair_datum: oracle_logic.PairDatum = output_datum
           and {
             matching_output.address.payment_credential == Script(pair_policy_id),
-            oracle_logic.valid_initial_pair_datum(pair_id, pair_datum),
+            oracle_logic.pair_asset_name(pair_datum.pair_id) == pair_asset_name,
+            oracle_logic.valid_pair_state(pair_datum),
             oracle_logic.exact_locked_lovelace(matching_output, pair_datum),
           }
         }
@@ -143,10 +158,15 @@ fn has_valid_pair_bootstrap_output(
   }
 }
 
-fn receiver_input_present(inputs: List<Input>, receiver_hash: ScriptHash) -> Bool {
+fn receiver_input_present(
+  inputs: List<Input>,
+  receiver_hash: ScriptHash,
+) -> Bool {
   list.any(
     inputs,
-    fn(input) { input.output.address.payment_credential == Script(receiver_hash) },
+    fn(input) {
+      input.output.address.payment_credential == Script(receiver_hash)
+    },
   )
 }
 
@@ -156,7 +176,10 @@ fn coordinator_witness_present(
 ) -> Bool {
   when config_datum.update_coordinator_credential is {
     Some(expected_credential) ->
-      list.any(withdrawals, fn(withdrawal) { withdrawal.1st == expected_credential })
+      list.any(
+        withdrawals,
+        fn(withdrawal) { withdrawal.1st == expected_credential },
+      )
 
     None -> False
   }

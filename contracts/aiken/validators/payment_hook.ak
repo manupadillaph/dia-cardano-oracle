@@ -1,9 +1,10 @@
 use aiken/collection/dict
 use aiken/collection/list
 use cardano/address.{Credential, Script}
-use cardano/assets
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{InlineDatum, Input, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
 use dia_cardano_oracle/config_logic
 use dia_cardano_oracle/payment_hook_logic
 
@@ -27,13 +28,20 @@ validator payment_hook(
         |> dict.to_pairs()
 
     let consumes_bootstrap_input =
-      list.any(self.inputs, fn(input) { input.output_reference == bootstrap_ref })
+      list.any(
+        self.inputs,
+        fn(input) { input.output_reference == bootstrap_ref },
+      )
 
     expect Some(config_input) =
       list.find(
         self.inputs,
         fn(input) {
-          assets.quantity_of(input.output.value, config_policy_id, config_asset_name) == 1
+          assets.quantity_of(
+            input.output.value,
+            config_policy_id,
+            config_asset_name,
+          ) == 1
         },
       )
 
@@ -59,16 +67,19 @@ validator payment_hook(
       config_logic.valid_config_state(next_config),
       previous_config.payment_hook_ref == None,
       previous_config.update_coordinator_credential == None,
-      next_config.payment_hook_ref ==
-        Some(
-          config_logic.PaymentHookRef {
-            policy_id: policy_id,
-            asset_name: expected_asset_name,
-          },
-        ),
+      next_config.payment_hook_ref == Some(
+        config_logic.PaymentHookRef {
+          policy_id,
+          asset_name: expected_asset_name,
+        },
+      ),
       next_config.update_coordinator_credential == Some(coordinator_credential),
       config_logic.has_config_signer(previous_config, self),
-      has_valid_payment_hook_output(self.outputs, policy_id, expected_asset_name),
+      has_valid_payment_hook_output(
+        self.outputs,
+        policy_id,
+        expected_asset_name,
+      ),
     }
   }
 
@@ -102,7 +113,11 @@ validator payment_hook(
     and {
       payment_hook_logic.valid_payment_hook_state(current_datum),
       payment_hook_logic.valid_payment_hook_state(next_datum),
-      assets.quantity_of(own_input.output.value, own_policy_id, expected_asset_name) == 1,
+      assets.quantity_of(
+        own_input.output.value,
+        own_policy_id,
+        expected_asset_name,
+      ) == 1,
       assets.quantity_of(next_output.value, own_policy_id, expected_asset_name) == 1,
       payment_hook_logic.exact_locked_lovelace(own_input.output, current_datum),
       payment_hook_logic.exact_locked_lovelace(next_output, next_datum),
@@ -112,7 +127,11 @@ validator payment_hook(
             next_datum.accrued_fees_lovelace - current_datum.accrued_fees_lovelace
 
           and {
-            has_expected_hook_ref(config_datum, own_policy_id, expected_asset_name),
+            has_expected_hook_ref(
+              config_datum,
+              own_policy_id,
+              expected_asset_name,
+            ),
             coordinator_witness_present(self.withdrawals, config_datum),
             payment_hook_logic.fee_charge_transition(
               current_datum,
@@ -122,16 +141,21 @@ validator payment_hook(
           }
         }
 
-        payment_hook_logic.AdminUpdate ->
-          and {
+        payment_hook_logic.AdminUpdate -> and {
             config_logic.has_config_signer(config_datum, self),
-            payment_hook_logic.admin_update_transition(current_datum, next_datum),
+            payment_hook_logic.admin_update_transition(
+              current_datum,
+              next_datum,
+            ),
           }
 
-        payment_hook_logic.Withdraw { amount } ->
-          and {
+        payment_hook_logic.Withdraw { amount } -> and {
             config_logic.has_config_signer(config_datum, self),
-            payment_hook_logic.withdraw_transition(current_datum, next_datum, amount),
+            payment_hook_logic.withdraw_transition(
+              current_datum,
+              next_datum,
+              amount,
+            ),
             payment_hook_logic.withdraw_paid_to_target(
               self.outputs,
               current_datum.withdraw_address,
@@ -186,7 +210,11 @@ fn find_visible_config_input(
     list.find(
       self.inputs,
       fn(input) {
-        assets.quantity_of(input.output.value, config_policy_id, config_asset_name) == 1
+        assets.quantity_of(
+          input.output.value,
+          config_policy_id,
+          config_asset_name,
+        ) == 1
       },
     )
   is {
@@ -210,13 +238,12 @@ fn has_expected_hook_ref(
   hook_policy_id: PolicyId,
   hook_asset_name: AssetName,
 ) -> Bool {
-  config_datum.payment_hook_ref ==
-    Some(
-      config_logic.PaymentHookRef {
-        policy_id: hook_policy_id,
-        asset_name: hook_asset_name,
-      },
-    )
+  config_datum.payment_hook_ref == Some(
+    config_logic.PaymentHookRef {
+      policy_id: hook_policy_id,
+      asset_name: hook_asset_name,
+    },
+  )
 }
 
 fn coordinator_witness_present(
@@ -225,7 +252,10 @@ fn coordinator_witness_present(
 ) -> Bool {
   when config_datum.update_coordinator_credential is {
     Some(expected_credential) ->
-      list.any(withdrawals, fn(withdrawal) { withdrawal.1st == expected_credential })
+      list.any(
+        withdrawals,
+        fn(withdrawal) { withdrawal.1st == expected_credential },
+      )
 
     None -> False
   }

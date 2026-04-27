@@ -2,3 +2,9 @@
 .vscode
 .codex
 .mcp
+.windsurf
+
+# Generated CLI state artifacts. Keep only the state directory placeholder/docs.
+offchain/cli/state/preview/**
+!offchain/cli/state/preview/
+!offchain/cli/state/preview/.gitkeep

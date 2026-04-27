@@ -34,6 +34,6 @@ Use [`offchain/cli/README.md`](offchain/cli/README.md) for the step-by-step Prev
 - protocol bootstrap
 - global and client reference-script publication
 - client onboarding
-- pair bootstrap
-- single and batch updates
+- pair create/update through signed oracle intents
+- single and batch updates, including first-time pair creation
 - admin and withdrawal transactions

@@ -69,7 +69,7 @@ Solid arrows are compile-time inputs that change the script hash. Dashed arrows 
 2. Parameterize client Receiver scripts: select an existing wallet UTxO as `receiver_ref`, compile `receiver`, compile `pair_state`, and record the client's Receiver and Pair script metadata.
 3. Submit Receiver bootstrap: consume `receiver_ref`, mint the Receiver NFT, and create the Receiver UTxO with its initial balance.
 4. Publish client reference scripts: create ReferenceHolder UTxOs for this client's `receiver` spend and `pair_state` spend scripts.
-5. For each pair the client subscribes to, submit Pair bootstrap: mint the Pair NFT for that `pair_id` and create the initial Pair UTxO.
+5. Top up the Receiver before live updates. The first update for each subscribed pair mints the Pair NFT and creates the Pair UTxO from the signed intent's real datum.
 
 ### 1.4 Reference-script deployment (global)
 
@@ -118,7 +118,7 @@ flowchart LR
 - **Inputs:** admin wallet UTxOs.
 - **Outputs:** two reference-script UTxOs carrying the client-specific `receiver` and `pair_state` binaries.
 - **Isolation:** the binaries embed `receiver_ref` and `receiver_hash` respectively, so each client has its own pair of reference-script UTxOs with distinct hashes; they cannot be reused across clients.
-- **Minting policies:** Receiver and Pair minting policies are one-shot/bootstrap scripts and are not published as reference scripts.
+- **Minting policies:** Receiver minting is one-shot/bootstrap. Pair minting is client-scoped and used by update transactions when a pair does not exist yet; the Pair spend validator is published as a reference script.
 
 ---
 
@@ -131,7 +131,7 @@ All are NFTs (quantity 1, fixed asset name).
 | Config NFT | `config` | Config bootstrap | Marks the canonical Config UTxO |
 | PaymentHook NFT | `payment_hook` | Hook bootstrap | Marks the canonical Hook UTxO |
 | Receiver NFT | `receiver` | Receiver bootstrap (per client) | Marks the canonical Receiver UTxO for that client |
-| Pair NFT | `pair_state` | Pair bootstrap (per pair) | Marks the canonical Pair UTxO for that client and pair |
+| Pair NFT | `pair_state` | First oracle update for that pair | Marks the canonical Pair UTxO for that client and pair |
 
 Per DIA's request, these NFTs are not a "client identity" mechanism. They are state tokens required by the eUTxO model to identify the live UTxO of each state. Client identity remains the script hash of the client's Receiver (same principle as the EVM contract address being the client identifier).
 
@@ -494,22 +494,34 @@ flowchart LR
   - `new.utxo.lovelace == old.utxo.lovelace - amount` (exactly `amount` goes to `recipient`).
   - Signer is one of `config_admins`.
 
-### 5.7 Pair bootstrap (per client × pair)
+### 5.7 First pair update/create (per client × pair)
 
-The client-to-Pair binding is enforced by `pair_state` being parametrized by `receiver_hash`: client X's Pair minting policy has a different hash from client Y's.
+There is no separate Pair bootstrap state. The client-to-Pair binding is enforced by `pair_state` being parametrized by `receiver_hash`: client X's Pair minting policy has a different hash from client Y's. When a pair does not exist yet, the update transaction mints the Pair NFT and creates the first Pair UTxO with the signed intent's real datum.
 
 ```mermaid
 flowchart LR
-  Admin([DIA Admin Wallet]):::wallet
+  Updater([Updater Wallet<br/>pays network fee]):::wallet
+  ReceiverIn[Receiver UTxO<br/>balance v1]:::script
+  HookIn[PaymentHook UTxO<br/>accrued v1]:::script
   ConfigRef[Config UTxO]:::script
-  PairV[/pair_state mint<br/>Bootstrap pair_id/]:::redeemer
+  PairMint[/pair_state mint<br/>MintPairs/]:::redeemer
+  ReceiverV[/receiver spend<br/>PayFee/]:::redeemer
+  HookV[/payment_hook spend<br/>ApplyFee/]:::redeemer
+  Coord[/update_coordinator withdraw<br/>ApplySingle intent/]:::redeemer
 
-  Admin --> TX((Pair<br/>bootstrap)):::tx
+  Updater --> TX((First price update<br/>create pair)):::tx
+  ReceiverIn --> TX
+  HookIn --> TX
   ConfigRef -.-> TX
-  PairV -.-> TX
+  PairMint -.-> TX
+  ReceiverV -.-> TX
+  HookV -.-> TX
+  Coord -.-> TX
 
-  TX -- mint +1 Pair NFT --> PairOut[Pair UTxO<br/>value: minUTxO + Pair NFT<br/>datum: pair_id, price=0, ts=0, nonce=0]:::script
-  TX --> Change([Admin change]):::wallet
+  TX -- mint +1 Pair NFT --> PairOut[Pair UTxO<br/>price,ts,nonce from intent<br/>last_intent_hash<br/>last_signer]:::script
+  TX --> ReceiverOut[Receiver UTxO<br/>balance v2 = v1 - fee]:::script
+  TX --> HookOut[PaymentHook UTxO<br/>accrued v2 = v1 + fee]:::script
+  TX --> Change([Updater change]):::wallet
 
   classDef wallet fill:#fff8dc,stroke:#aa8800,color:#111
   classDef script fill:#e8f0ff,stroke:#3355aa,stroke-width:1.5px,color:#111
@@ -518,17 +530,28 @@ flowchart LR
 ```
 
 - **Frequency:** once per (client, pair).
-- **Inputs:** DIA admin wallet (pays network fee + min UTxO of the Pair).
-- **Reference inputs:** Config UTxO (to check admin signature).
+- **Inputs:** Receiver UTxO, PaymentHook UTxO, updater wallet.
+- **Reference inputs:** Config UTxO.
 - **Mint:** `+1` Pair NFT (policy = `pair_state` parametrized by `receiver_hash` of this client; asset name derived from `pair_id`).
-- **Outputs:** Pair UTxO (address = `pair_state` spend for this client, value = `min_utxo_lovelace` + Pair NFT, initial datum with `pair_id`, `price = 0`, `timestamp = 0`, `nonce = 0`).
-- **Mint redeemer:** `Bootstrap { pair_id }`.
-- **Signers:** at least one `Config.config_admins`.
+- **Withdrawals:** `update_coordinator` (withdraw 0 trigger).
+- **Outputs:** Pair UTxO with `pair_id`, `price`, `timestamp`, `nonce`, `intent_hash`, and `signer` copied from the signed intent; Receiver and PaymentHook UTxOs updated for the protocol fee.
+- **Mint redeemer:** `MintPairs`.
+- **Coordinator withdraw redeemer:** `ApplySingle { witness }`.
+- **Signers:** none required by validators; the updater only pays network fees.
 - **Validates (mint policy):**
-  - Signer is one of `config_admins` (read from the Config reference input).
-  - Exactly one Pair NFT is minted.
-  - Pair NFT asset name correctly derived from `pair_id`.
-  - Exactly one output at the Pair address holds the NFT and a well-formed initial datum.
+  - At least one Pair NFT is minted under this client pair policy.
+  - Every minted Pair NFT has quantity `1`.
+  - Every minted Pair NFT has a Pair output at the pair script address with a well-formed datum and exact min UTxO.
+  - The Config reference input is valid.
+  - The configured coordinator withdrawal is present.
+- **Validates (coordinator):**
+  - The signed intent is authorized and valid.
+  - The Pair NFT asset name equals `blake2b_256(intent.symbol)`.
+  - There is no existing Pair input for this token.
+  - Exactly one Pair output exists for this token.
+  - The output datum equals the intent's real `symbol`, `price`, `timestamp`, `nonce`, `intent_hash`, and `signer`.
+  - The total minted Pair NFTs in the transaction exactly matches the create witnesses, so hidden extra pair mints are rejected.
+  - Receiver and PaymentHook fee transitions are exact.
 
 ### 5.8 Price update (single) — main tx
 
@@ -573,7 +596,7 @@ flowchart LR
   - PaymentHook UTxO.
   - Updater wallet (pays network fee; permissionless, does not need to be DIA).
 - **Reference inputs:** Config UTxO.
-- **Mint:** —
+- **Mint:** — if the Pair UTxO already exists. If it does not exist, this is the first pair update/create described in 5.7.
 - **Withdrawals:** `update_coordinator` (withdraw 0 trigger).
 - **Outputs:**
   - Pair UTxO recreated (same NFT, datum updated with new `price`, `timestamp`, `nonce`, `last_intent_hash`, `last_signer`).
@@ -635,11 +658,12 @@ flowchart LR
 ```
 
 - **Frequency:** high, variant of 5.8.
-- **Inputs:** K Pair UTxOs (same client, different pairs) + Receiver UTxO + Hook UTxO + updater wallet.
+- **Inputs:** existing Pair UTxOs for updates, Receiver UTxO, Hook UTxO, updater wallet.
 - **Reference inputs:** Config UTxO.
 - **Withdrawals:** `update_coordinator` with `ApplyBatch { [intent] }`.
-- **Outputs:** K Pair UTxOs recreated, Receiver UTxO recreated (`balance -= K * fee`), Hook UTxO (`accrued += K * fee`).
-- **Validates:** same as 5.8 but per intent; the coordinator iterates over the list.
+- **Mint:** Pair NFTs for any batch entries whose Pair UTxO does not exist yet.
+- **Outputs:** K Pair UTxOs written from K signed intents, Receiver UTxO recreated (`balance -= K * fee`), Hook UTxO (`accrued += K * fee`).
+- **Validates:** same as 5.7/5.8 per intent; the coordinator iterates over the list, rejects duplicate pair units, requires a shared receiver and pair policy, and ensures the count of minted Pair NFTs equals the count of create witnesses.
 
 ### 5.10 PaymentHook withdraw
 

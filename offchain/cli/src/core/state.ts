@@ -42,14 +42,11 @@ export type PaymentHookState = {
   lifetimeWithdrawnLovelace: string;
 };
 
-export type DeploymentScripts = {
+export type ProtocolDeploymentScripts = {
   configPolicyId: string;
   configUnit: string;
   configValidatorHash: string;
   configValidatorAddress: string;
-  pairPolicyId: string | null;
-  pairValidatorHash: string | null;
-  pairValidatorAddress: string | null;
   coordinatorHash: string;
   coordinatorRewardAddress: string;
   paymentHookPolicyId: string | null;
@@ -57,6 +54,15 @@ export type DeploymentScripts = {
   paymentHookValidatorHash: string | null;
   paymentHookValidatorAddress: string | null;
 };
+
+export type ClientDeploymentScripts = {
+  pairPolicyId: string | null;
+  pairValidatorHash: string | null;
+  pairValidatorAddress: string | null;
+};
+
+export type ResolvedDeploymentScripts = ProtocolDeploymentScripts &
+  ClientDeploymentScripts;
 
 export type ReceiverState = {
   balanceLovelace: string;
@@ -83,6 +89,25 @@ export type ReceiverArtifact = {
   };
 };
 
+export type ReceiverParameterizeDefaults = {
+  clientId: string;
+  receiverAssetLabel?: string;
+  receiverAssetName: string;
+  minUtxoLovelace: string;
+};
+
+export type ConfigParameterizeDefaults = {
+  configAssetLabel?: string;
+  configAssetName: string;
+};
+
+export type PaymentHookParameterizeDefaults = {
+  paymentHookAssetLabel?: string;
+  paymentHookAssetName: string;
+  withdrawAddress: string;
+  minUtxoLovelace: string;
+};
+
 export type ReferenceScriptUtxo = {
   txHash: string;
   outputIndex: number;
@@ -101,6 +126,30 @@ export type ReferenceScriptsState = {
   };
 };
 
+export type ProtocolCompiledScripts = {
+  configMintPolicy: string;
+  configValidator: string;
+  coordinatorValidator: string;
+  paymentHookMintPolicy: string;
+  paymentHookValidator: string;
+};
+
+export type ClientCompiledScripts = {
+  receiverMintPolicy: string;
+  receiverValidator: string;
+  pairMintPolicy: string;
+  pairValidator: string;
+};
+
+export type ResolvedCompiledScripts = ProtocolCompiledScripts &
+  ClientCompiledScripts;
+
+export type TransactionRecord = {
+  step: string;
+  submittedTxHash: string | null;
+  confirmed: boolean;
+};
+
 export type ConfigStateArtifact = {
   wallet: {
     source: "seed" | "private-key";
@@ -117,7 +166,7 @@ export type ConfigStateArtifact = {
       outputIndex: number;
     } | null;
   };
-  scripts: DeploymentScripts;
+  scripts: ProtocolDeploymentScripts;
   configState: ConfigState;
   configUtxo: {
     current: {
@@ -132,17 +181,43 @@ export type ConfigStateArtifact = {
       outputIndex: number;
     };
   } | null;
+  compiledScripts: ProtocolCompiledScripts;
+  drafts?: {
+    configParameterize?: ConfigParameterizeDefaults;
+    paymentHookParameterize?: PaymentHookParameterizeDefaults;
+    receiverParameterize?: ReceiverParameterizeDefaults;
+  };
   referenceScripts?: ReferenceScriptsState;
   receiver?: ReceiverArtifact;
   datum: {
     configCbor: string;
     paymentHookCbor: string;
+  };
+  transactions?: TransactionRecord[];
+};
+
+export type ClientStateArtifact = {
+  wallet?: {
+    source: "seed" | "private-key";
+    address: string;
+  };
+  clientId: string;
+  scripts: ClientDeploymentScripts;
+  compiledScripts: ClientCompiledScripts;
+  drafts?: {
+    receiverParameterize?: ReceiverParameterizeDefaults;
+  };
+  referenceScripts?: {
+    client?: {
+      receiver: ReferenceScriptUtxo;
+      pair: ReferenceScriptUtxo;
+    };
+  };
+  receiver?: ReceiverArtifact;
+  datum: {
     receiverCbor: string;
   };
-  transaction?: {
-    submittedTxHash: string | null;
-    confirmed: boolean;
-  };
+  transactions?: TransactionRecord[];
 };
 
 export type PairLiveState = {
@@ -161,34 +236,6 @@ export type PairStateArtifact = {
     source: "seed" | "private-key";
     address: string;
   };
-  referenceHolderAddress?: string;
-  bootstrapRefs: {
-    config: {
-      txHash: string;
-      outputIndex: number;
-    };
-    paymentHook: {
-      txHash: string;
-      outputIndex: number;
-    };
-  };
-  scripts: DeploymentScripts;
-  configState: ConfigState;
-  configUtxo: {
-    current: {
-      txHash: string;
-      outputIndex: number;
-    };
-  };
-  paymentHookState: PaymentHookState;
-  paymentHookUtxo: {
-    current: {
-      txHash: string;
-      outputIndex: number;
-    };
-  };
-  referenceScripts?: ReferenceScriptsState;
-  receiver?: ReceiverArtifact;
   pair: {
     tokenName: string;
     pairId: string;
@@ -201,15 +248,9 @@ export type PairStateArtifact = {
   };
   pairState: PairLiveState;
   datum: {
-    configCbor: string;
-    paymentHookCbor: string;
-    receiverCbor: string;
     pairCbor: string;
   };
-  transaction?: {
-    submittedTxHash: string | null;
-    confirmed: boolean;
-  };
+  transactions?: TransactionRecord[];
 };
 
 const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -225,8 +266,45 @@ export async function readConfigState(
   return JSON.parse(raw) as ConfigStateArtifact;
 }
 
+export async function readClientState(
+  statePath: string,
+): Promise<ClientStateArtifact> {
+  const raw = await readFile(path.resolve(statePath), "utf8");
+  return JSON.parse(raw) as ClientStateArtifact;
+}
+
 export function getDefaultConfigStatePath(): string {
   return DEFAULT_PREVIEW_CONFIG_STATE_PATH;
+}
+
+export function emptyProtocolCompiledScripts(): ProtocolCompiledScripts {
+  return {
+    configMintPolicy: "",
+    configValidator: "",
+    coordinatorValidator: "",
+    paymentHookMintPolicy: "",
+    paymentHookValidator: "",
+  };
+}
+
+export function emptyClientCompiledScripts(): ClientCompiledScripts {
+  return {
+    receiverMintPolicy: "",
+    receiverValidator: "",
+    pairMintPolicy: "",
+    pairValidator: "",
+  };
+}
+
+export function appendTransactionRecord(
+  records: TransactionRecord[] | undefined,
+  entry: TransactionRecord,
+): TransactionRecord[] | undefined {
+  if (!entry.submittedTxHash) {
+    return records;
+  }
+
+  return [...(records ?? []), entry];
 }
 
 export async function readPairState(

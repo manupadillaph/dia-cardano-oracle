@@ -1,6 +1,6 @@
 use aiken/builtin
-use aiken/crypto.{blake2b_256, keccak_256, verify_ecdsa_signature}
 use aiken/collection/list
+use aiken/crypto.{blake2b_256, keccak_256, verify_ecdsa_signature}
 use aiken/primitive/bytearray
 use aiken/primitive/string
 use cardano/assets
@@ -57,7 +57,10 @@ pub fn oracle_intent_hash(
   keccak_256(
     bytearray.concat(
       #"1901",
-      bytearray.concat(domain_separator(domain), oracle_intent_struct_hash(intent)),
+      bytearray.concat(
+        domain_separator(domain),
+        oracle_intent_struct_hash(intent),
+      ),
     ),
   )
 }
@@ -122,7 +125,10 @@ pub fn next_pair_matches_witness(
     next.price == witness.intent.price,
     next.timestamp == witness.intent.timestamp,
     next.nonce == witness.intent.nonce,
-    next.intent_hash == oracle_intent_hash(config_datum.domain_data, witness.intent),
+    next.intent_hash == oracle_intent_hash(
+      config_datum.domain_data,
+      witness.intent,
+    ),
     next.signer == witness.intent.signer,
     witness.pair_token_name == pair_asset_name(next.pair_id),
     is_fresh_update(previous, witness.intent),
@@ -130,17 +136,24 @@ pub fn next_pair_matches_witness(
   }
 }
 
-pub fn valid_initial_pair_datum(
-  pair_id: ByteArray,
+pub fn initial_pair_matches_witness(
   datum: PairDatum,
+  config_datum: config_logic.ConfigDatum,
+  witness: UpdateWitness,
 ) -> Bool {
   and {
     valid_pair_state(datum),
-    !bytearray.is_empty(pair_id),
-    datum.pair_id == pair_id,
-    datum.price == 0,
-    datum.timestamp == 0,
-    datum.nonce == 0,
+    datum.pair_id == witness.intent.symbol,
+    datum.price == witness.intent.price,
+    datum.timestamp == witness.intent.timestamp,
+    datum.nonce == witness.intent.nonce,
+    datum.intent_hash == oracle_intent_hash(
+      config_datum.domain_data,
+      witness.intent,
+    ),
+    datum.signer == witness.intent.signer,
+    witness.pair_token_name == pair_asset_name(datum.pair_id),
+    has_valid_signature(config_datum, witness),
   }
 }
 
@@ -175,39 +188,43 @@ fn normalized_signature(signature: ByteArray) -> ByteArray {
 
 fn domain_separator(domain: config_logic.Domain) -> ByteArray {
   keccak_256(
-    abi_words([
-      keccak_256(
-        string.to_bytearray(
-          @"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)",
+    abi_words(
+      [
+        keccak_256(
+          string.to_bytearray(
+            @"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)",
+          ),
         ),
-      ),
-      keccak_256(domain.name),
-      keccak_256(domain.version),
-      uint256_word(domain.source_chain_id),
-      address_word(domain.verifying_contract),
-      zero_word(),
-    ]),
+        keccak_256(domain.name),
+        keccak_256(domain.version),
+        uint256_word(domain.source_chain_id),
+        address_word(domain.verifying_contract),
+        zero_word(),
+      ],
+    ),
   )
 }
 
 fn oracle_intent_struct_hash(intent: OracleIntent) -> ByteArray {
   keccak_256(
-    abi_words([
-      keccak_256(
-        string.to_bytearray(
-          @"OracleIntent(string intentType,string version,uint256 chainId,uint256 nonce,uint256 expiry,string symbol,uint256 price,uint256 timestamp,string source)",
+    abi_words(
+      [
+        keccak_256(
+          string.to_bytearray(
+            @"OracleIntent(string intentType,string version,uint256 chainId,uint256 nonce,uint256 expiry,string symbol,uint256 price,uint256 timestamp,string source)",
+          ),
         ),
-      ),
-      keccak_256(intent.intent_type),
-      keccak_256(intent.version),
-      uint256_word(intent.chain_id),
-      uint256_word(intent.nonce),
-      uint256_word(intent.expiry),
-      keccak_256(intent.symbol),
-      uint256_word(intent.price),
-      uint256_word(intent.timestamp),
-      keccak_256(intent.source),
-    ]),
+        keccak_256(intent.intent_type),
+        keccak_256(intent.version),
+        uint256_word(intent.chain_id),
+        uint256_word(intent.nonce),
+        uint256_word(intent.expiry),
+        keccak_256(intent.symbol),
+        uint256_word(intent.price),
+        uint256_word(intent.timestamp),
+        keccak_256(intent.source),
+      ],
+    ),
   )
 }
 
@@ -306,18 +323,30 @@ test negative_price_intent_signature_is_rejected() {
   )
 }
 
-test valid_initial_pair_datum_accepts_zero_initial_state() {
-  valid_initial_pair_datum(
-    sample_pair_datum().pair_id,
+test initial_pair_matches_witness_accepts_first_real_update() {
+  initial_pair_matches_witness(
+    sample_pair_datum(),
+    sample_config(),
+    sample_witness(),
+  )
+}
+
+test initial_pair_matches_witness_rejects_zero_placeholder() {
+  !initial_pair_matches_witness(
     PairDatum {
       pair_id: sample_pair_datum().pair_id,
       price: 0,
       timestamp: 0,
       nonce: 0,
-      intent_hash: sample_pair_datum().intent_hash,
+      intent_hash: oracle_intent_hash(
+        sample_config().domain_data,
+        sample_intent(),
+      ),
       signer: sample_pair_datum().signer,
       min_utxo_lovelace: sample_pair_datum().min_utxo_lovelace,
     },
+    sample_config(),
+    sample_witness(),
   )
 }
 
@@ -384,11 +413,7 @@ test unauthorized_dia_signer_is_rejected() {
 }
 
 test wrong_pair_symbol_is_rejected() {
-  let next =
-    PairDatum {
-      ..sample_pair_datum(),
-      pair_id: #"4554482f555344",
-    }
+  let next = PairDatum { ..sample_pair_datum(), pair_id: #"4554482f555344" }
 
   !next_pair_matches_witness(
     PairDatum {
