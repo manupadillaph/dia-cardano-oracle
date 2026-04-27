@@ -1,9 +1,10 @@
 use aiken/collection/dict
 use aiken/collection/list
 use cardano/address.{Credential, Script}
-use cardano/assets
 use cardano/assets.{AssetName, PolicyId}
-use cardano/transaction.{InlineDatum, Input, Output, OutputReference, Transaction}
+use cardano/transaction.{
+  InlineDatum, Input, Output, OutputReference, Transaction,
+}
 use dia_cardano_oracle/config_logic
 use dia_cardano_oracle/receiver_logic
 
@@ -26,7 +27,10 @@ validator receiver(
         |> dict.to_pairs()
 
     let consumes_bootstrap_input =
-      list.any(self.inputs, fn(input) { input.output_reference == bootstrap_ref })
+      list.any(
+        self.inputs,
+        fn(input) { input.output_reference == bootstrap_ref },
+      )
 
     expect Some(config_input) =
       find_visible_config_input(self, config_policy_id, config_asset_name)
@@ -69,7 +73,11 @@ validator receiver(
       receiver_logic.valid_receiver_state(current_datum),
       receiver_logic.valid_receiver_state(next_datum),
       own_policy_id == expected_receiver_hash(own_input.output),
-      assets.quantity_of(own_input.output.value, own_policy_id, expected_asset_name) == 1,
+      assets.quantity_of(
+        own_input.output.value,
+        own_policy_id,
+        expected_asset_name,
+      ) == 1,
       assets.quantity_of(next_output.value, own_policy_id, expected_asset_name) == 1,
       next_output.address.payment_credential == Script(own_policy_id),
       receiver_logic.exact_locked_lovelace(own_input.output, current_datum),
@@ -109,7 +117,11 @@ validator receiver(
           and {
             config_logic.valid_config_state(config_datum),
             config_logic.has_config_signer(config_datum, self),
-            receiver_logic.withdraw_transition(current_datum, next_datum, amount),
+            receiver_logic.withdraw_transition(
+              current_datum,
+              next_datum,
+              amount,
+            ),
             receiver_logic.paid_to_recipient(self.outputs, recipient, amount),
           }
         }
@@ -131,7 +143,11 @@ fn has_valid_receiver_output(
     list.find(
       outputs,
       fn(output) {
-        assets.quantity_of(output.value, receiver_policy_id, receiver_asset_name) == 1
+        assets.quantity_of(
+          output.value,
+          receiver_policy_id,
+          receiver_asset_name,
+        ) == 1
       },
     )
   is {
@@ -140,9 +156,14 @@ fn has_valid_receiver_output(
         InlineDatum(output_datum) -> {
           expect receiver_datum: receiver_logic.ReceiverDatum = output_datum
           and {
-            receiver_output.address.payment_credential == Script(receiver_policy_id),
+            receiver_output.address.payment_credential == Script(
+              receiver_policy_id,
+            ),
             receiver_logic.valid_receiver_state(receiver_datum),
-            receiver_logic.exact_locked_lovelace(receiver_output, receiver_datum),
+            receiver_logic.exact_locked_lovelace(
+              receiver_output,
+              receiver_datum,
+            ),
           }
         }
 
@@ -162,7 +183,11 @@ fn find_visible_config_input(
     list.find(
       self.inputs,
       fn(input) {
-        assets.quantity_of(input.output.value, config_policy_id, config_asset_name) == 1
+        assets.quantity_of(
+          input.output.value,
+          config_policy_id,
+          config_asset_name,
+        ) == 1
       },
     )
   is {
@@ -192,7 +217,10 @@ fn coordinator_witness_present(
 ) -> Bool {
   when config_datum.update_coordinator_credential is {
     Some(expected_credential) ->
-      list.any(withdrawals, fn(withdrawal) { withdrawal.1st == expected_credential })
+      list.any(
+        withdrawals,
+        fn(withdrawal) { withdrawal.1st == expected_credential },
+      )
 
     None -> False
   }

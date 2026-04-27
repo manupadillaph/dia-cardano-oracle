@@ -1,6 +1,0 @@
-{
-  "clientId": "client-a",
-  "receiverAssetName": "4449415f52454345495645525f434c49454e545f41",
-  "initialBalanceLovelace": "10000000",
-  "minUtxoLovelace": "3000000"
-}

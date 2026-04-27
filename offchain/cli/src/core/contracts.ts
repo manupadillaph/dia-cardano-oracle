@@ -13,6 +13,7 @@ import {
 } from "@lucid-evolution/lucid";
 import { getBlueprintValidator } from "./blueprint.js";
 import { getCliConfig } from "./config.js";
+import { normalizeHex } from "./dia-intent.js";
 
 const CONFIG_STATE_MINT_TITLE = "config_state.config_state.mint";
 const CONFIG_STATE_SPEND_TITLE = "config_state.config_state.spend";
@@ -195,6 +196,29 @@ export function scriptAddressFromValidator(validator: SpendingValidator): string
 
 export function policyIdFromMintingPolicy(policy: MintingPolicy): string {
   return mintingPolicyToId(policy);
+}
+
+export function mintingPolicyFromCompiledScript(script: string): MintingPolicy {
+  return {
+    type: "PlutusV3",
+    script: normalizeHex(script, "compiled minting policy"),
+  };
+}
+
+export function spendingValidatorFromCompiledScript(script: string): SpendingValidator {
+  return {
+    type: "PlutusV3",
+    script: normalizeHex(script, "compiled spending validator"),
+  };
+}
+
+export function withdrawalValidatorFromCompiledScript(
+  script: string,
+): WithdrawalValidator {
+  return {
+    type: "PlutusV3",
+    script: normalizeHex(script, "compiled withdrawal validator"),
+  };
 }
 
 export function scriptRewardAddress(scriptHash: string): string {

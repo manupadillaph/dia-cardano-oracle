@@ -4,10 +4,7 @@ use cardano/assets
 use cardano/transaction.{Output}
 
 pub type ReceiverDatum {
-  ReceiverDatum {
-    balance_lovelace: Int,
-    min_utxo_lovelace: Int,
-  }
+  ReceiverDatum { balance_lovelace: Int, min_utxo_lovelace: Int }
 }
 
 pub type ReceiverRedeemer {
@@ -24,8 +21,7 @@ pub fn valid_receiver_state(datum: ReceiverDatum) -> Bool {
 }
 
 pub fn exact_locked_lovelace(output: Output, datum: ReceiverDatum) -> Bool {
-  assets.lovelace_of(output.value) ==
-    datum.min_utxo_lovelace + datum.balance_lovelace
+  assets.lovelace_of(output.value) == datum.min_utxo_lovelace + datum.balance_lovelace
 }
 
 pub fn top_up_transition(
@@ -79,16 +75,16 @@ pub fn paid_to_recipient(
   let total_paid =
     outputs
       |> list.filter(fn(output) { output.address == recipient })
-      |> list.foldl(0, fn(output, acc) { acc + assets.lovelace_of(output.value) })
+      |> list.foldl(
+          0,
+          fn(output, acc) { acc + assets.lovelace_of(output.value) },
+        )
 
   total_paid >= amount
 }
 
 pub fn sample_receiver() -> ReceiverDatum {
-  ReceiverDatum {
-    balance_lovelace: 10_000_000,
-    min_utxo_lovelace: 2_000_000,
-  }
+  ReceiverDatum { balance_lovelace: 10_000_000, min_utxo_lovelace: 2_000_000 }
 }
 
 test valid_receiver_state_accepts_non_negative_values() {

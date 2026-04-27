@@ -54,7 +54,7 @@ Tasks:
 - [x] Preview wallet and provider verification commands.
 - [x] Commands for Config parameterization from an existing wallet UTxO, bootstrap, reference-script publication, and Config update.
 - [x] Commands for PaymentHook parameterization from an existing wallet UTxO, bootstrap, reference-script publication, and withdraw.
-- [x] Commands for Receiver/Pair parameterization from an existing wallet UTxO, Receiver bootstrap, client reference-script publication, pair bootstrap, and single update.
+- [x] Commands for Receiver/Pair parameterization from an existing wallet UTxO, Receiver bootstrap, client reference-script publication, and signed-intent pair create/update.
 - [x] Commands for Receiver top-up and Receiver withdraw (per client).
 - [x] Commands for batch update.
 - [x] Per-client state layout under `state/<network>/clients/<client>/`.

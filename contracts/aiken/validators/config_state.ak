@@ -1,7 +1,6 @@
 use aiken/collection/dict
 use aiken/collection/list
 use cardano/address.{Script}
-use cardano/assets
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{InlineDatum, Output, OutputReference, Transaction}
 use dia_cardano_oracle/config_logic
@@ -23,13 +22,20 @@ validator config_state(
         |> dict.to_pairs()
 
     let consumes_bootstrap_input =
-      list.any(self.inputs, fn(input) { input.output_reference == bootstrap_ref })
+      list.any(
+        self.inputs,
+        fn(input) { input.output_reference == bootstrap_ref },
+      )
 
     and {
       consumes_bootstrap_input,
       asset_name == expected_asset_name,
       quantity == 1,
-      has_valid_config_bootstrap_output(self.outputs, policy_id, expected_asset_name),
+      has_valid_config_bootstrap_output(
+        self.outputs,
+        policy_id,
+        expected_asset_name,
+      ),
     }
   }
 
@@ -57,8 +63,16 @@ validator config_state(
     expect next_datum: config_logic.ConfigDatum = output_datum
 
     and {
-      assets.quantity_of(own_input.output.value, own_policy_id, expected_asset_name) == 1,
-      assets.quantity_of(config_output.value, own_policy_id, expected_asset_name) == 1,
+      assets.quantity_of(
+        own_input.output.value,
+        own_policy_id,
+        expected_asset_name,
+      ) == 1,
+      assets.quantity_of(
+        config_output.value,
+        own_policy_id,
+        expected_asset_name,
+      ) == 1,
       config_logic.valid_config_state(current_datum),
       config_logic.valid_config_state(next_datum),
       config_logic.has_config_signer(current_datum, self),

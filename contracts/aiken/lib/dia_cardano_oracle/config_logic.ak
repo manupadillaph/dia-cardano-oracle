@@ -15,10 +15,7 @@ pub type Domain {
 }
 
 pub type PaymentHookRef {
-  PaymentHookRef {
-    policy_id: PolicyId,
-    asset_name: AssetName,
-  }
+  PaymentHookRef { policy_id: PolicyId, asset_name: AssetName }
 }
 
 pub type ConfigDatum {
@@ -72,10 +69,7 @@ pub fn valid_config_state(datum: ConfigDatum) -> Bool {
   }
 }
 
-pub fn admin_update_transition(
-  previous: ConfigDatum,
-  next: ConfigDatum,
-) -> Bool {
+pub fn admin_update_transition(previous: ConfigDatum, next: ConfigDatum) -> Bool {
   and {
     valid_config_state(previous),
     valid_config_state(next),
@@ -86,8 +80,7 @@ pub fn admin_update_transition(
 fn unique_authorized_dia_public_keys(keys: List<ByteArray>) -> Bool {
   when keys is {
     [] -> True
-    [head, ..tail] ->
-      and {
+    [head, ..tail] -> and {
         !bytearray.is_empty(head),
         !list.has(tail, head),
         unique_authorized_dia_public_keys(tail),
@@ -126,7 +119,9 @@ pub fn sample_domain() -> Domain {
 pub fn sample_config() -> ConfigDatum {
   ConfigDatum {
     config_admins: [#"11111111111111111111111111111111111111111111111111111111"],
-    authorized_dia_public_keys: [#"03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807"],
+    authorized_dia_public_keys: [
+      #"03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807",
+    ],
     domain_data: sample_domain(),
     protocol_fee_lovelace: 2_000_000,
     payment_hook_ref: None,

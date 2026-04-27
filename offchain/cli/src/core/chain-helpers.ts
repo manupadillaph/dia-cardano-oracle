@@ -81,6 +81,10 @@ export type OutRefLike = {
   outputIndex: number;
 };
 
+type WalletUtxoReader = {
+  getUtxos(): Promise<UTxO[]>;
+};
+
 export function selectFundingUtxo(
   utxos: UTxO[],
   excludedOutRefs: OutRefLike[],
@@ -116,6 +120,41 @@ export function selectBootstrapUtxo(
       if (leftValue === rightValue) return 0;
       return leftValue > rightValue ? -1 : 1;
     })[0] ?? null;
+}
+
+export async function waitForWalletSettlement(args: {
+  wallet: WalletUtxoReader;
+  previousUtxos: UTxO[];
+  spentUtxos: UTxO[];
+  label: string;
+  maxAttempts?: number;
+  delayMs?: number;
+}): Promise<UTxO[]> {
+  const spentOutRefs = args.spentUtxos.map((utxo) => outRefKey(utxo));
+  if (spentOutRefs.length === 0) {
+    return args.wallet.getUtxos();
+  }
+
+  const previousSnapshot = utxoSnapshot(args.previousUtxos);
+  const maxAttempts = args.maxAttempts ?? 12;
+  const delayMs = args.delayMs ?? 1_500;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const currentUtxos = await args.wallet.getUtxos();
+    const currentSnapshot = utxoSnapshot(currentUtxos);
+    const spentInputsStillVisible = spentOutRefs.some((outRef) => currentSnapshot.has(outRef));
+    const walletChanged = !sameSnapshot(previousSnapshot, currentSnapshot);
+
+    if (!spentInputsStillVisible && walletChanged) {
+      return currentUtxos;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+
+  throw new Error(
+    `Transaction confirmation was observed, but the wallet UTxO set did not refresh after ${args.label}.`,
+  );
 }
 
 function selectablePureLovelaceUtxos(
@@ -255,6 +294,28 @@ export function buildPairDatumCbor(state: PairLiveState): string {
       BigInt(state.minUtxoLovelace),
     ]),
   );
+}
+
+function outRefKey(outRef: OutRefLike): string {
+  return `${outRef.txHash}#${outRef.outputIndex}`;
+}
+
+function utxoSnapshot(utxos: UTxO[]): Set<string> {
+  return new Set(utxos.map((utxo) => outRefKey(utxo)));
+}
+
+function sameSnapshot(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 export function updateWitnessData(
