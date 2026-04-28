@@ -1,7 +1,6 @@
 # PaymentHook Contention: Design Options
 
-This document explains a structural concern we found while planning the
-Cardano feeder, and the three options we see for solving it.
+This document explains a structural concern we found while finishing the milestone 1 implementation.
 
 ## Why this is a Cardano-specific problem
 
