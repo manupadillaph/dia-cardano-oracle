@@ -328,3 +328,86 @@ because the `OracleIntent` signature is bound to the registry domain.
 
 Everything else can move forward against the registry interface, with fixtures
 used only for tests and reproducible evidence.
+
+## Cardano destination concerns
+
+The source-side picture is clear: registry, scanner, enricher, router. The
+destination side adds concerns that the operator CLI did not have to solve,
+because the CLI was designed for one interactive command at a time. A
+long-running service has to handle these explicitly.
+
+The items below are recorded as open problems. The intent of this section is
+to make them visible, not to prescribe a solution.
+
+### Updater wallet key management
+
+The feeder signs Cardano transactions continuously with the updater wallet.
+
+Today the CLI reads the signing key from `.env` (`CARDANO_WALLET_SEED` or
+`CARDANO_PRIVATE_KEY`). That is fine for Preview and interactive use. For a
+long-running service, how the updater key is provisioned and protected at
+runtime needs to be defined.
+
+Open: how the daemon obtains and holds the updater signing key.
+
+### UTxO contention
+
+This is the most important destination-side issue and may also affect the
+Milestone 1 mainnet flow, not only Milestone 2.
+
+The CLI is interactive: one update at a time, sequentially, each command
+re-reading chain state before building the next transaction. A daemon can have
+many intents in flight, and that exposes a structural property of the current
+contract layout:
+
+- The Pair UTxOs are not the bottleneck. Each subscribed pair has its own Pair
+  UTxO, so updates to BTC/USD and ETH/USD do not contend with each other on
+  the Pair side.
+- The Receiver UTxO is shared across all pairs of a client. Every update for
+  any pair of that client consumes the same Receiver UTxO.
+- The PaymentHook UTxO is global. Every update of every client consumes the
+  same PaymentHook UTxO.
+
+So two updates submitted in parallel for the same client cannot both succeed:
+the second transaction cites a Receiver input that the first one already
+spent, and is rejected. Across clients, the same collision can still happen
+on the PaymentHook UTxO.
+
+The existing `ApplyBatch` path is the natural Cardano-friendly response for
+the per-client case (one tx per client per submission window, batching all
+pending intents for that client). The cross-client PaymentHook contention is
+a separate problem that batching per-client does not solve on its own.
+
+Open: how the daemon serializes/batches submissions so concurrent intents do
+not destroy each other on the Receiver and PaymentHook UTxOs, and whether the
+contract layout needs an adjustment to relax the global PaymentHook
+bottleneck.
+
+### Finality and tx-in-flight tracking
+
+Cardano blocks are ~20 seconds. After submitting a transaction, the feeder
+cannot immediately reuse the new Receiver and PaymentHook outputs from its
+local copy: the next tx must reference an output that is actually confirmed in
+a block.
+
+A daemon needs to:
+
+- Detect confirmation of submitted transactions before reusing their outputs.
+- Avoid double-submitting the same intent across restarts.
+- Decide what to do when a submitted transaction does not confirm within a
+  budget (rebuild from current chain tip vs retry).
+
+Open: the confirmation mechanism, the persistence model for in-flight state,
+and the timeout/rebuild policy.
+
+### Operator surface
+
+The CLI exposes one-shot commands. A long-running service needs a different
+operator surface: liveness/readiness signals, metrics, structured logs, and a
+control to pause or drain submission without losing in-flight state.
+
+The "Health command" row in the M2 table above should be read as this
+operator surface, not as a one-shot CLI command.
+
+Open: what is exposed (health endpoints, metrics, controls) and through which
+transport.
