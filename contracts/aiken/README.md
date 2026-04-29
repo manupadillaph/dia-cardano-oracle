@@ -22,9 +22,25 @@ There is also no placeholder Pair bootstrap state. The first transaction for a p
 - `validators/` contains spending, minting, and withdrawal validators.
 - `lib/` contains shared types, validation helpers, and unit tests.
 
+## Prerequisites
+
+- Aiken `v1.1.21` (Plutus V3), as pinned in `aiken.toml`. Install via the
+  [official instructions](https://aiken-lang.org/installation-instructions).
+
+You only need Aiken installed if you intend to modify the contracts, run the
+unit tests, or rebuild the blueprint. The compiled output `plutus.json` is
+committed in this directory, so the off-chain CLI can run without rebuilding.
+
 ## Commands
 
 ```sh
-aiken check
-aiken build
+aiken check    # run the unit test suite
+aiken build    # regenerate ./plutus.json (the compiled blueprint)
 ```
+
+## Compiled output
+
+`plutus.json` in this directory is the canonical compiled blueprint and is
+consumed by the off-chain CLI in [`offchain/cli/`](../../offchain/cli/) to
+derive script hashes, addresses, and policy ids. Whenever the contracts
+change, rebuild this file with `aiken build` and commit the result.

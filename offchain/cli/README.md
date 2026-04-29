@@ -21,6 +21,20 @@ The normal flow is:
 7. submit single or batch oracle updates
 8. run maintenance transactions
 
+## Prerequisites
+
+- **Node.js 20+** with `npm`.
+- **Compiled on-chain contracts.** This CLI reads
+  [`contracts/aiken/plutus.json`](../../contracts/aiken/plutus.json) to derive
+  script hashes, addresses, and policy ids. The file is committed, so a
+  fresh clone works out of the box. If you have modified the contracts,
+  rebuild it with `aiken build` first — see
+  [`contracts/aiken/README.md`](../../contracts/aiken/README.md).
+- **A Blockfrost project id** for Cardano Preview (or a Koios endpoint).
+- **A funded Preview wallet seed.** The CLI can create one for you in step 3
+  below; fund it from the Cardano Preview faucet before continuing past
+  step 5.
+
 ## Environment
 
 Create `.env` from `.env.example` and set:

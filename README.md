@@ -23,6 +23,31 @@ Component docs:
 - `offchain/`: off-chain components and operator tooling
 - `docs/`: architecture, milestones, requirements, plans, references
 
+## Prerequisites
+
+- **Node.js 20+** with `npm`, for the off-chain CLI.
+- **Aiken `v1.1.21`** (Plutus V3), only required if you intend to modify or
+  rebuild the on-chain contracts. See the
+  [official installation instructions](https://aiken-lang.org/installation-instructions).
+  The compiled blueprint `contracts/aiken/plutus.json` is committed in this
+  repository, so a fresh clone can run the CLI runbook without installing
+  Aiken first.
+- A **Blockfrost** project id (or a Koios endpoint) for Cardano Preview, and
+  a funded Preview wallet seed. Setup details are in the CLI runbook.
+
+## Quick Start
+
+For a fresh clone, the recommended order is:
+
+1. (Optional) Build and test the on-chain contracts —
+   see [`contracts/aiken/README.md`](contracts/aiken/README.md).
+2. Install and configure the off-chain CLI — see
+   [`offchain/cli/README.md`](offchain/cli/README.md).
+3. Follow the CLI runbook end-to-end on Preview.
+
+Step 1 can be skipped if you have not modified the contracts; the committed
+`plutus.json` is the canonical compiled artifact that the CLI consumes.
+
 ## Operator Workflow
 
 Use [`offchain/cli/README.md`](offchain/cli/README.md) for the step-by-step Preview runbook:
