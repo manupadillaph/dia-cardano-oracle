@@ -8,12 +8,17 @@ import {
   spendingValidatorFromCompiledScript,
 } from "../core/contracts.js";
 import { normalizeEthereumAddressHex, normalizeHex } from "../core/dia-intent.js";
-import { makeConfiguredLucid, selectConfiguredWallet } from "../core/lucid.js";
+import {
+  makeConfiguredLucid,
+  makeConfiguredProvider,
+  selectConfiguredWallet,
+} from "../core/lucid.js";
 import {
   appendTransactionRecord,
   readConfigState,
   type ConfigStateArtifact,
 } from "../core/state.js";
+import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
@@ -72,6 +77,22 @@ export async function configUpdate(args: {
     state.scripts.configUnit,
     "config",
   );
+  const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
+    await loadReferenceScriptUtxos(
+      [
+        {
+          key: "config",
+          label: "config",
+          outRef: state.referenceScripts?.global?.config
+            ? {
+                txHash: state.referenceScripts.global.config.txHash,
+                outputIndex: state.referenceScripts.global.config.outputIndex,
+              }
+            : null,
+        },
+      ] as const,
+      reportProgress,
+    );
 
   const configAssetName = splitUnit(state.scripts.configUnit).assetName;
   const configValidator = state.compiledScripts?.configValidator
@@ -86,16 +107,23 @@ export async function configUpdate(args: {
   const adminUpdateRedeemer = Data.to(new Constr(0, []));
 
   reportProgress("Building Preview config update transaction");
-  const txBuilder = lucid
+  let txBuilder = lucid
     .newTx()
+    .readFrom(referenceScriptUtxos)
     .collectFrom([currentConfigUtxo], adminUpdateRedeemer)
     .addSignerKey(walletDefaults.paymentKeyHash)
-    .attach.SpendingValidator(configValidator)
     .pay.ToContract(
       state.scripts.configValidatorAddress,
       { kind: "inline", value: configDatumCbor },
       { ...currentConfigUtxo.assets },
     );
+
+  if (missingReferenceScript) {
+    reportProgress(
+      "Reference script for config is missing on-chain; attaching the config validator inline.",
+    );
+    txBuilder = txBuilder.attach.SpendingValidator(configValidator);
+  }
 
   const txSignBuilder = await txBuilder.complete();
   const unsignedHash = txSignBuilder.toHash();

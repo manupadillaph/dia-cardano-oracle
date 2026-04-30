@@ -1,5 +1,6 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { confirm } from "@inquirer/prompts";
 import {
   Constr,
   getAddressDetails,
@@ -34,7 +35,6 @@ import {
 } from "../core/dia-intent.js";
 import {
   makeConfiguredLucid,
-  makeConfiguredProvider,
   selectConfiguredWallet,
 } from "../core/lucid.js";
 import {
@@ -44,6 +44,7 @@ import {
   type ReceiverState,
   type PairStateArtifact,
 } from "../core/state.js";
+import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   decodePaymentHookDatum,
@@ -76,7 +77,32 @@ export async function submitOracleUpdate(args: {
   if (!client.scripts.pairPolicyId || !client.scripts.pairValidatorHash || !client.scripts.pairValidatorAddress) {
     throw new Error("Oracle update requires client state after Receiver/Pair parameterization.");
   }
-  const existingPair = await readOptionalPairState(statePath);
+  let existingPair = await readOptionalPairState(statePath);
+  if (
+    existingPair &&
+    existingPair.pair.pairValidatorAddress !== client.scripts.pairValidatorAddress
+  ) {
+    reportProgress(
+      `Pair state file ${statePath} is from a different deployment. If you continue, the file will be deleted and recreated from the signed intent.`,
+    );
+    reportProgress(
+      `  state file pair address: ${existingPair.pair.pairValidatorAddress}`,
+    );
+    reportProgress(
+      `  current deployment    : ${client.scripts.pairValidatorAddress}`,
+    );
+    const proceed = await confirm({
+      message:
+        "Delete the stale pair state file and continue (the next update will mint a new Pair NFT and create the Pair UTxO from the signed intent)?",
+      default: true,
+    });
+    if (!proceed) {
+      throw new Error("Aborted by user. Stale pair state file was kept.");
+    }
+    await unlink(statePath);
+    reportProgress(`Removed stale pair state file ${statePath}`);
+    existingPair = null;
+  }
   const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
   const pairMintPolicy = client.compiledScripts?.pairMintPolicy
     ? mintingPolicyFromCompiledScript(client.compiledScripts.pairMintPolicy)
@@ -175,7 +201,52 @@ export async function submitOracleUpdate(args: {
     wallet.address(),
     wallet.getUtxos(),
   ]);
-  const referenceScriptUtxos = await loadReferenceScriptUtxos(state);
+  const { utxos: referenceScriptUtxos, missing: missingReferenceScripts } =
+    await loadReferenceScriptUtxos(
+      [
+        {
+          key: "coordinator",
+          label: "coordinator",
+          outRef: state.referenceScripts?.global?.coordinator
+            ? {
+                txHash: state.referenceScripts.global.coordinator.txHash,
+                outputIndex: state.referenceScripts.global.coordinator.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "paymentHook",
+          label: "payment hook",
+          outRef: state.referenceScripts?.global?.paymentHook
+            ? {
+                txHash: state.referenceScripts.global.paymentHook.txHash,
+                outputIndex: state.referenceScripts.global.paymentHook.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "receiver",
+          label: "receiver",
+          outRef: state.referenceScripts?.client?.receiver
+            ? {
+                txHash: state.referenceScripts.client.receiver.txHash,
+                outputIndex: state.referenceScripts.client.receiver.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "pair",
+          label: "pair",
+          outRef: state.referenceScripts?.client?.pair
+            ? {
+                txHash: state.referenceScripts.client.pair.txHash,
+                outputIndex: state.referenceScripts.client.pair.outputIndex,
+              }
+            : null,
+        },
+      ] as const,
+      reportProgress,
+    );
 
   const currentConfigUtxo = await findSingleUtxoAtUnit(
     lucid,
@@ -375,14 +446,22 @@ export async function submitOracleUpdate(args: {
     txBuilder = txBuilder.collectFrom([currentPairUtxo!], pairRedeemer);
   }
 
-  if (referenceScriptUtxos.length === 0) {
+  if (missingReferenceScripts.receiver) {
+    reportProgress("Reference script for receiver is missing on-chain; attaching the receiver validator inline.");
+    txBuilder = txBuilder.attach.SpendingValidator(receiverValidator);
+  }
+  if (missingReferenceScripts.paymentHook) {
+    reportProgress("Reference script for payment hook is missing on-chain; attaching the payment hook validator inline.");
+    txBuilder = txBuilder.attach.SpendingValidator(paymentHookValidator);
+  }
+  if (missingReferenceScripts.coordinator) {
+    reportProgress("Reference script for coordinator is missing on-chain; attaching the coordinator validator inline.");
+    txBuilder = txBuilder.attach.WithdrawalValidator(coordinatorValidator);
+  }
+  if (!isCreate && missingReferenceScripts.pair) {
+    reportProgress("Reference script for pair is missing on-chain; attaching the pair validator inline.");
     txBuilder = txBuilder
-      .attach.SpendingValidator(receiverValidator)
-      .attach.SpendingValidator(paymentHookValidator)
-      .attach.WithdrawalValidator(coordinatorValidator);
-    if (!isCreate) {
-      txBuilder = txBuilder.attach.SpendingValidator(pairValidator);
-    }
+      .attach.SpendingValidator(pairValidator);
   }
 
   const txSignBuilder = await txBuilder.complete();
@@ -638,29 +717,4 @@ function requireInlineDatum(utxo: UTxO, label: string): string {
     throw new Error(`Current ${label} UTxO is missing its inline datum.`);
   }
   return utxo.datum;
-}
-
-async function loadReferenceScriptUtxos(
-  state: { referenceScripts?: import("../core/state.js").ReferenceScriptsState },
-): Promise<UTxO[]> {
-  const globalRefs = state.referenceScripts?.global;
-  const clientRefs = state.referenceScripts?.client;
-
-  if (!globalRefs || !clientRefs) {
-    return [];
-  }
-
-  const provider = await makeConfiguredProvider();
-  return provider.getUtxosByOutRef([
-    {
-      txHash: globalRefs.coordinator.txHash,
-      outputIndex: globalRefs.coordinator.outputIndex,
-    },
-    {
-      txHash: globalRefs.paymentHook.txHash,
-      outputIndex: globalRefs.paymentHook.outputIndex,
-    },
-    { txHash: clientRefs.receiver.txHash, outputIndex: clientRefs.receiver.outputIndex },
-    { txHash: clientRefs.pair.txHash, outputIndex: clientRefs.pair.outputIndex },
-  ]);
 }

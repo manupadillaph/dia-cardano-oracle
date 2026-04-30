@@ -29,7 +29,6 @@ import {
 } from "../core/dia-intent.js";
 import {
   makeConfiguredLucid,
-  makeConfiguredProvider,
   selectConfiguredWallet,
 } from "../core/lucid.js";
 import {
@@ -42,6 +41,7 @@ import {
   type ResolvedDeploymentScripts,
   type ReferenceScriptsState,
 } from "../core/state.js";
+import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildPairDatumCbor,
@@ -191,7 +191,52 @@ export async function submitBatchOracleUpdate(args: {
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const walletAddress = await lucid.wallet().address();
-  const referenceScriptUtxos = await loadReferenceScriptUtxos(state);
+  const { utxos: referenceScriptUtxos, missing: missingReferenceScripts } =
+    await loadReferenceScriptUtxos(
+      [
+        {
+          key: "coordinator",
+          label: "coordinator",
+          outRef: state.referenceScripts?.global?.coordinator
+            ? {
+                txHash: state.referenceScripts.global.coordinator.txHash,
+                outputIndex: state.referenceScripts.global.coordinator.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "paymentHook",
+          label: "payment hook",
+          outRef: state.referenceScripts?.global?.paymentHook
+            ? {
+                txHash: state.referenceScripts.global.paymentHook.txHash,
+                outputIndex: state.referenceScripts.global.paymentHook.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "receiver",
+          label: "receiver",
+          outRef: state.referenceScripts?.client?.receiver
+            ? {
+                txHash: state.referenceScripts.client.receiver.txHash,
+                outputIndex: state.referenceScripts.client.receiver.outputIndex,
+              }
+            : null,
+        },
+        {
+          key: "pair",
+          label: "pair",
+          outRef: state.referenceScripts?.client?.pair
+            ? {
+                txHash: state.referenceScripts.client.pair.txHash,
+                outputIndex: state.referenceScripts.client.pair.outputIndex,
+              }
+            : null,
+        },
+      ] as const,
+      reportProgress,
+    );
 
   const [currentConfigUtxo, currentPaymentHookUtxo, currentReceiverUtxo] =
     await Promise.all([
@@ -384,14 +429,21 @@ export async function submitBatchOracleUpdate(args: {
     txBuilder = txBuilder.collectFrom(currentPairUtxos, pairRedeemer);
   }
 
-  if (referenceScriptUtxos.length === 0) {
-    txBuilder = txBuilder
-      .attach.SpendingValidator(receiverValidator)
-      .attach.SpendingValidator(paymentHookValidator)
-      .attach.WithdrawalValidator(coordinatorValidator);
-    if (currentPairUtxos.length > 0) {
-      txBuilder = txBuilder.attach.SpendingValidator(pairValidator);
-    }
+  if (missingReferenceScripts.receiver) {
+    reportProgress("Reference script for receiver is missing on-chain; attaching the receiver validator inline.");
+    txBuilder = txBuilder.attach.SpendingValidator(receiverValidator);
+  }
+  if (missingReferenceScripts.paymentHook) {
+    reportProgress("Reference script for payment hook is missing on-chain; attaching the payment hook validator inline.");
+    txBuilder = txBuilder.attach.SpendingValidator(paymentHookValidator);
+  }
+  if (missingReferenceScripts.coordinator) {
+    reportProgress("Reference script for coordinator is missing on-chain; attaching the coordinator validator inline.");
+    txBuilder = txBuilder.attach.WithdrawalValidator(coordinatorValidator);
+  }
+  if (missingReferenceScripts.pair) {
+    reportProgress("Reference script for pair is missing on-chain; attaching the pair validator inline.");
+    txBuilder = txBuilder.attach.SpendingValidator(pairValidator);
   }
 
   const mintAssets: Record<string, bigint> = {};
@@ -770,31 +822,6 @@ export function ensureCompatibleBatch(states: ResolvedPairStateArtifact[]): void
       throw new Error("Batch update entries must target the same client pair validator.");
     }
   }
-}
-
-async function loadReferenceScriptUtxos(
-  state: ResolvedPairStateArtifact,
-): Promise<import("@lucid-evolution/lucid").UTxO[]> {
-  const globalRefs = state.referenceScripts?.global;
-  const clientRefs = state.referenceScripts?.client;
-
-  if (!globalRefs || !clientRefs) {
-    return [];
-  }
-
-  const provider = await makeConfiguredProvider();
-  return provider.getUtxosByOutRef([
-    {
-      txHash: globalRefs.coordinator.txHash,
-      outputIndex: globalRefs.coordinator.outputIndex,
-    },
-    {
-      txHash: globalRefs.paymentHook.txHash,
-      outputIndex: globalRefs.paymentHook.outputIndex,
-    },
-    { txHash: clientRefs.receiver.txHash, outputIndex: clientRefs.receiver.outputIndex },
-    { txHash: clientRefs.pair.txHash, outputIndex: clientRefs.pair.outputIndex },
-  ]);
 }
 
 function requireInlineDatum(utxo: UTxO, label: string): string {

@@ -8,7 +8,6 @@ import {
 } from "../core/contracts.js";
 import {
   makeConfiguredLucid,
-  makeConfiguredProvider,
   selectConfiguredWallet,
 } from "../core/lucid.js";
 import {
@@ -16,6 +15,7 @@ import {
   readConfigState,
   type ConfigStateArtifact,
 } from "../core/state.js";
+import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildPaymentHookDatumCbor,
@@ -64,8 +64,6 @@ export async function paymentHookWithdraw(args: {
       "payment hook",
     ),
   ]);
-  const referenceScriptUtxos = await loadPaymentHookReferenceScriptUtxos(state);
-
   const configAssetName = splitUnit(state.scripts.configUnit).assetName;
   const paymentHookValidator = state.compiledScripts?.paymentHookValidator
     ? spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator)
@@ -105,6 +103,23 @@ export async function paymentHookWithdraw(args: {
   );
 
   reportProgress("Building Preview payment-hook withdraw transaction");
+  const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
+    await loadReferenceScriptUtxos(
+      [
+        {
+          key: "paymentHook",
+          label: "payment hook",
+          outRef: state.referenceScripts?.global?.paymentHook
+            ? {
+                txHash: state.referenceScripts.global.paymentHook.txHash,
+                outputIndex: state.referenceScripts.global.paymentHook.outputIndex,
+              }
+            : null,
+        },
+      ] as const,
+      reportProgress,
+    );
+
   let txBuilder = lucid
     .newTx()
     .readFrom([currentConfigUtxo, ...referenceScriptUtxos])
@@ -124,7 +139,10 @@ export async function paymentHookWithdraw(args: {
       lovelace: amountLovelace,
     });
 
-  if (referenceScriptUtxos.length === 0) {
+  if (missingReferenceScript) {
+    reportProgress(
+      "Reference script for payment hook is missing on-chain; attaching the payment hook validator inline.",
+    );
     txBuilder = txBuilder.attach.SpendingValidator(paymentHookValidator);
   }
 
@@ -190,21 +208,4 @@ export async function paymentHookWithdraw(args: {
 
 function reportProgress(message: string): void {
   console.error(`[preview:payment-hook:withdraw] ${message}`);
-}
-
-async function loadPaymentHookReferenceScriptUtxos(
-  state: ConfigStateArtifact,
-) {
-  const paymentHookRef = state.referenceScripts?.global?.paymentHook;
-  if (!paymentHookRef) {
-    return [];
-  }
-
-  const provider = await makeConfiguredProvider();
-  return provider.getUtxosByOutRef([
-    {
-      txHash: paymentHookRef.txHash,
-      outputIndex: paymentHookRef.outputIndex,
-    },
-  ]);
 }

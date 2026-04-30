@@ -1,5 +1,5 @@
 import path from "node:path";
-import { Constr } from "@lucid-evolution/lucid";
+import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
@@ -8,13 +8,13 @@ import {
 } from "../core/contracts.js";
 import {
   makeConfiguredLucid,
-  makeConfiguredProvider,
   selectConfiguredWallet,
 } from "../core/lucid.js";
 import {
   appendTransactionRecord,
   type ClientStateArtifact,
 } from "../core/state.js";
+import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildReceiverDatumCbor,
@@ -54,8 +54,6 @@ export async function receiverTopUp(args: {
     state.receiver.receiverUnit,
     "receiver",
   );
-  const referenceScriptUtxos = await loadReceiverReferenceScriptUtxos(state);
-
   const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
   const receiverValidator = state.compiledScripts?.receiverValidator
     ? spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator)
@@ -81,6 +79,23 @@ export async function receiverTopUp(args: {
   const topUpRedeemer = Data.to(new Constr(0, []));
 
   reportProgress("Building Preview receiver top-up transaction");
+  const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
+    await loadReferenceScriptUtxos(
+      [
+        {
+          key: "receiver",
+          label: "receiver",
+          outRef: state.referenceScripts?.client?.receiver
+            ? {
+                txHash: state.referenceScripts.client.receiver.txHash,
+                outputIndex: state.referenceScripts.client.receiver.outputIndex,
+              }
+            : null,
+        },
+      ] as const,
+      reportProgress,
+    );
+
   let txBuilder = lucid
     .newTx()
     .readFrom(referenceScriptUtxos)
@@ -96,7 +111,10 @@ export async function receiverTopUp(args: {
       },
     );
 
-  if (referenceScriptUtxos.length === 0) {
+  if (missingReferenceScript) {
+    reportProgress(
+      "Reference script for receiver is missing on-chain; attaching the receiver validator inline.",
+    );
     txBuilder = txBuilder.attach.SpendingValidator(receiverValidator);
   }
 
@@ -159,21 +177,4 @@ export async function receiverTopUp(args: {
 
 function reportProgress(message: string): void {
   console.error(`[preview:receiver:top-up] ${message}`);
-}
-
-async function loadReceiverReferenceScriptUtxos(
-  state: ClientStateArtifact,
-) {
-  const receiverRef = state.referenceScripts?.client?.receiver;
-  if (!receiverRef) {
-    return [];
-  }
-
-  const provider = await makeConfiguredProvider();
-  return provider.getUtxosByOutRef([
-    {
-      txHash: receiverRef.txHash,
-      outputIndex: receiverRef.outputIndex,
-    },
-  ]);
 }
