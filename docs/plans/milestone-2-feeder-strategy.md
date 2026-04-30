@@ -523,12 +523,15 @@ The returned bytes are an ABI-encoded `OracleIntent` struct. Decoded with
 `ethers`:
 
 ```sh
+export DATA=$(curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"eth_call","params":[{"to":"0xf8c614a483a0427a13512f52ac72a576678be317","data":"0xf13c46aa813ba9ea1b439f755ac2bf104cd854afa47c4ca6f5019647ee07746b8b2f2ff6"},"latest"],"id":1}' \
+  https://testnet-rpc.diadata.org | jq -r '.result')
+ 
 node -e "
 const { AbiCoder } = require('ethers');
-const data = '<the result hex string from the eth_call above>';
 const [intent] = AbiCoder.defaultAbiCoder().decode(
   ['tuple(string intentType, string version, uint256 sourceChainId, uint256 price, uint256 expiry, string symbol, uint256 nonce, uint256 timestamp, string source, bytes signature, address signer)'],
-  data
+  process.env.DATA
 );
 console.log(intent);
 "
