@@ -1,0 +1,96 @@
+[preview:protocol:init] Wrote JSON output to /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504_162227/config-bootstrap.json
+{
+  "wallet": {
+    "source": "seed",
+    "address": "addr_test1qpgpsm75w7l9u6au7shqzsaulrtxz2gp6xw9zhun70es6tt4t3wsjavx26kmh586erf8xxhqc2y7urq5az32sjv56nyqquxj3j"
+  },
+  "referenceHolderAddress": "addr_test1wzwyjd7eza9rrndl7hwkesadzpq7ajchxxd67mj4zrz80hcka7jtk",
+  "bootstrapRefs": {
+    "config": {
+      "txHash": "",
+      "outputIndex": 0
+    },
+    "paymentHook": null
+  },
+  "scripts": {
+    "configPolicyId": "",
+    "configUnit": "",
+    "configValidatorHash": "",
+    "configValidatorAddress": "",
+    "coordinatorHash": "",
+    "coordinatorRewardAddress": "",
+    "paymentHookPolicyId": null,
+    "paymentHookUnit": null,
+    "paymentHookValidatorHash": null,
+    "paymentHookValidatorAddress": null
+  },
+  "configState": {
+    "validConfigSigners": [
+      "50186fd477be5e6bbcf42e0143bcf8d6612901d19c515f93f3f30d2d"
+    ],
+    "authorizedDiaPublicKeys": [
+      "02d78ade9f8a9c064c8c588dba903df0cc0118596b9ec65f665dea1b448519f531"
+    ],
+    "domain": {
+      "name": "DIA Oracle",
+      "version": "1.0",
+      "sourceChainId": "100640",
+      "verifyingContract": "f8c614a483a0427a13512f52ac72a576678be317"
+    },
+    "protocolFeeLovelace": "2000000",
+    "maxBootstrapDriftSeconds": "300",
+    "paymentHookRef": null,
+    "updateCoordinatorCredential": null,
+    "minUtxoLovelace": "5000000"
+  },
+  "configUtxo": {
+    "current": {
+      "txHash": "",
+      "outputIndex": 0
+    }
+  },
+  "paymentHookState": null,
+  "paymentHookUtxo": null,
+  "compiledScripts": {
+    "configMintPolicy": "",
+    "configValidator": "",
+    "coordinatorValidator": "",
+    "paymentHookMintPolicy": "",
+    "paymentHookValidator": ""
+  },
+  "drafts": {
+    "configParameterize": {
+      "configAssetLabel": "DIA_CONFIG",
+      "configAssetName": "4449415f434f4e464947"
+    },
+    "paymentHookParameterize": {
+      "paymentHookAssetLabel": "DIA_PAYMENT_HOOK",
+      "paymentHookAssetName": "4449415f5041594d454e545f484f4f4b",
+      "withdrawAddress": "addr_test1qpgpsm75w7l9u6au7shqzsaulrtxz2gp6xw9zhun70es6tt4t3wsjavx26kmh586erf8xxhqc2y7urq5az32sjv56nyqquxj3j",
+      "minUtxoLovelace": "3000000"
+    }
+  },
+  "referenceScripts": {
+    "global": {
+      "config": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      },
+      "coordinator": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      },
+      "paymentHook": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      }
+    }
+  },
+  "datum": {
+    "configCbor": "",
+    "paymentHookCbor": ""
+  }
+}

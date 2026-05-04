@@ -1,0 +1,8 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:reference-scripts:publish-client --lovelace-per-output 3000000 --protocol-state ./state/preview_rerun_20260504_162227/config-bootstrap.json --state ./state/preview_rerun_20260504_162227/clients/client-a.json
+
+[1G[0K[preview:reference-scripts:publish-client] Using lovelacePerOutput=3000000 for client reference scripts
+[preview:reference-scripts:publish-client] Loading client state from /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504_162227/clients/client-a.json
+Client reference-script publish requires a protocol state artifact produced after payment-hook bootstrap.
+[1G[0K⠙[1G[0K

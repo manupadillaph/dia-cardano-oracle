@@ -1,0 +1,8 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:receiver:bootstrap --protocol-state ./state/preview_rerun_20260504_162227/config-bootstrap.json --state ./state/preview_rerun_20260504_162227/clients/client-a.json
+
+[1G[0K[preview:receiver:bootstrap] Using Receiver values from the client artifact
+[preview:receiver:bootstrap] Loading config state from /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504_162227/clients/client-a.json
+Receiver bootstrap requires a config state artifact produced after payment-hook bootstrap.
+[1G[0K⠙[1G[0K

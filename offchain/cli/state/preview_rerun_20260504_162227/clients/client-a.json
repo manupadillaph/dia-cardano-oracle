@@ -1,0 +1,39 @@
+{
+  "clientId": "client-a",
+  "scripts": {
+    "pairPolicyId": null,
+    "pairValidatorHash": null,
+    "pairValidatorAddress": null
+  },
+  "compiledScripts": {
+    "receiverMintPolicy": "",
+    "receiverValidator": "",
+    "pairMintPolicy": "",
+    "pairValidator": ""
+  },
+  "drafts": {
+    "receiverParameterize": {
+      "clientId": "client-a",
+      "receiverAssetLabel": "DIA_RECEIVER_CLIENT_A",
+      "receiverAssetName": "4449415f52454345495645525f434c49454e545f41",
+      "minUtxoLovelace": "3000000"
+    }
+  },
+  "referenceScripts": {
+    "client": {
+      "receiver": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      },
+      "pair": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      }
+    }
+  },
+  "datum": {
+    "receiverCbor": ""
+  }
+}

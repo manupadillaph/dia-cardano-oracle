@@ -1,0 +1,8 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:receiver:top-up --amount-lovelace 30000000 --protocol-state ./state/preview_rerun_20260504_162227/config-bootstrap.json --state ./state/preview_rerun_20260504_162227/clients/client-a.json
+
+[1G[0K[preview:receiver:top-up] Using amountLovelace=30000000 for receiver top-up
+[preview:receiver:top-up] Loading client state from /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504_162227/clients/client-a.json
+Receiver top-up requires a client state artifact produced by receiver bootstrap.
+[1G[0K⠙[1G[0K

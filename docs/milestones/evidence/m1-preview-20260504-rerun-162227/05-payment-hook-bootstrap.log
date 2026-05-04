@@ -1,0 +1,30 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:payment-hook:bootstrap --state ./state/preview_rerun_20260504_162227/config-bootstrap.json
+
+[1G[0K[preview:payment-hook:bootstrap] Using PaymentHook values from the protocol artifact
+[preview:payment-hook:bootstrap] Loading config state from /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504_162227/config-bootstrap.json
+[preview:payment-hook:bootstrap] Connecting to Preview and selecting the configured wallet
+[preview:payment-hook:bootstrap] Building Preview payment-hook bootstrap transaction
+[preview:payment-hook:bootstrap] Tx resources: fee=0.598308 ADA (598308 lovelace), cpu=305364782, mem=928137
+[preview:payment-hook:bootstrap] Unsigned transaction ready: c8ed6fbec5704d1b4acd63df023b7d527b804342f33177a365f375de61154bb6
+[preview:payment-hook:bootstrap] Submitted transaction hash: c8ed6fbec5704d1b4acd63df023b7d527b804342f33177a365f375de61154bb6
+node:internal/deps/undici/undici:14902
+      Error.captureStackTrace(err);
+            ^
+
+TypeError: fetch failed
+    at node:internal/deps/undici/undici:14902:13
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+    at async Timeout._onTimeout (file:///home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/node_modules/@lucid-evolution/provider/dist/index.js:275:29) {
+  [cause]: Error: getaddrinfo EAI_AGAIN cardano-preview.blockfrost.io
+      at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26) {
+    errno: -3001,
+    code: 'EAI_AGAIN',
+    syscall: 'getaddrinfo',
+    hostname: 'cardano-preview.blockfrost.io'
+  }
+}
+
+Node.js v20.20.1
+[1G[0K⠙[1G[0K

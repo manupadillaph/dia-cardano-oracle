@@ -1,0 +1,8 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:payment-hook:reference-script --lovelace-per-output 3000000 --state ./state/preview_rerun_20260504_162227/config-bootstrap.json
+
+[1G[0K[preview:payment-hook:reference-script] Using lovelacePerOutput=3000000 for payment-hook reference script
+[preview:payment-hook:reference-script] Connecting to Preview and selecting the configured wallet
+fetch failed
+[1G[0K⠙[1G[0K

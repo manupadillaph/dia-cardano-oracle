@@ -1,0 +1,10 @@
+file:///home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/dist/oracle/intent-sign.js:7
+        throw new Error("Missing required environment variable: DIA_EVM_PRIVATE_KEY");
+              ^
+
+Error: Missing required environment variable: DIA_EVM_PRIVATE_KEY
+    at requireIntentSigningPrivateKey (file:///home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/dist/oracle/intent-sign.js:7:15)
+    at signPreviewOracleIntentFromInput (file:///home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/dist/oracle/intent-sign.js:15:21)
+    at file:///home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/[eval1]:68:18
+
+Node.js v20.20.1
