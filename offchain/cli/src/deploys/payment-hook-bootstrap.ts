@@ -21,6 +21,7 @@ import {
   readConfigState,
   type ConfigStateArtifact,
 } from "../core/state.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
@@ -215,6 +216,7 @@ export async function paymentHookBootstrap(args: {
     );
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;
@@ -335,4 +337,3 @@ function resolvePaymentHookBootstrapInput(
     minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
   };
 }
-

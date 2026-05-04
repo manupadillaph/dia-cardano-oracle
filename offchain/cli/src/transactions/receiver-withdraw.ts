@@ -18,6 +18,7 @@ import {
   isAnyReferenceScriptMissing,
   loadReferenceScriptUtxos,
 } from "../core/reference-scripts.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { readClientContext } from "../core/artifact-context.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
@@ -165,6 +166,7 @@ export async function receiverWithdraw(args: {
   }
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;

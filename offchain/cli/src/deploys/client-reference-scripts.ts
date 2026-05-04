@@ -18,6 +18,7 @@ import {
   type ConfigStateArtifact,
   type ReceiverArtifact,
 } from "../core/state.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildReceiverDatumCbor,
@@ -103,6 +104,7 @@ export async function publishClientReferenceScripts(args: {
     .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: lovelacePerOutput }, pairValidator);
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;

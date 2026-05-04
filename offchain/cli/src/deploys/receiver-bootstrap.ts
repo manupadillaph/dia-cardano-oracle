@@ -18,6 +18,7 @@ import {
   appendTransactionRecord,
   type ClientStateArtifact,
 } from "../core/state.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { readClientContext } from "../core/artifact-context.js";
 import { makeConfiguredLucid, selectConfiguredWallet } from "../core/lucid.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
@@ -196,6 +197,7 @@ export async function receiverBootstrap(args: {
     );
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;
@@ -296,4 +298,3 @@ function resolveReceiverBootstrapInput(state: ClientStateArtifact): {
     minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
   };
 }
-

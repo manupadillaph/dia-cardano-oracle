@@ -18,6 +18,7 @@ import {
   isAnyReferenceScriptMissing,
   loadReferenceScriptUtxos,
 } from "../core/reference-scripts.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildReceiverDatumCbor,
@@ -125,6 +126,7 @@ export async function receiverTopUp(args: {
   }
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;

@@ -63,6 +63,7 @@ import {
   makeOracleEmulatorWithReferenceScriptRow,
 } from "./emulator/harness.js";
 import { isAnyReferenceScriptMissing } from "../core/reference-scripts.js";
+import { collectTxSignBuilderMetrics } from "../core/tx-metrics.js";
 
 testCardanoWalletCreate();
 testEthereumWalletCreate();
@@ -1384,6 +1385,10 @@ async function testEmulatorHarnessSimpleTransfer(): Promise<void> {
     .newTx()
     .pay.ToAddress(dest, { lovelace: send })
     .complete();
+  const metrics = collectTxSignBuilderMetrics(txSignBuilder);
+  assert.ok(metrics.feeLovelace > 0n, "simple transfers should still estimate a fee");
+  assert.equal(metrics.exUnits.cpu, 0n);
+  assert.equal(metrics.exUnits.mem, 0n);
   const signed = await txSignBuilder.sign.withWallet().complete();
   await emulatorSubmitAndMine(emulator, signed);
   const utxos = await emulator.getUtxos(dest);

@@ -41,6 +41,7 @@ import {
   type PairStateArtifact,
 } from "../core/state.js";
 import { loadReferenceScriptUtxos } from "../core/reference-scripts.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildPairDatumCbor,
@@ -415,6 +416,7 @@ export async function submitOracleUpdate(args: {
   }
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;

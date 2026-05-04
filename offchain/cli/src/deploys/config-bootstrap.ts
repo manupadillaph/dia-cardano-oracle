@@ -26,6 +26,7 @@ import {
   readConfigState,
   type ConfigStateArtifact,
 } from "../core/state.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
@@ -194,6 +195,7 @@ export async function configBootstrap(args: {
     );
 
   const txSignBuilder = await txBuilder.complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   const unsignedCbor = txSignBuilder.toCBOR();
 
@@ -340,5 +342,4 @@ function resolveConfigBootstrapInput(
 function reportProgress(message: string): void {
   console.error(`[preview:config:bootstrap] ${message}`);
 }
-
 

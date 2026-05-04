@@ -15,6 +15,7 @@ import {
   readConfigState,
   type ConfigStateArtifact,
 } from "../core/state.js";
+import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
 import {
   selectFundingUtxo,
   splitUnit,
@@ -78,6 +79,7 @@ export async function publishConfigReferenceScripts(args: {
     .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: lovelacePerOutput }, configValidator)
     .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: lovelacePerOutput }, coordinatorValidator)
     .complete();
+  reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
   let submittedTxHash: string | null = null;
   let confirmed = false;
