@@ -1,0 +1,29 @@
+{
+  "updates": [
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/btc-usd.json",
+      "intentPath": "./state/preview/intents/btc-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/eth-usd.json",
+      "intentPath": "./state/preview/intents/eth-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/ada-usd.json",
+      "intentPath": "./state/preview/intents/ada-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/usdt-usd.json",
+      "intentPath": "./state/preview/intents/usdt-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/dai-usd.json",
+      "intentPath": "./state/preview/intents/dai-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    }
+  ]
+}

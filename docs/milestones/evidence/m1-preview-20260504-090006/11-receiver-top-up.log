@@ -1,0 +1,11 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:receiver:top-up --amount-lovelace 30000000 --protocol-state ./state/preview_rerun_20260504-090006/config-bootstrap.json --state ./state/preview_rerun_20260504-090006/clients/client-a.json
+
+[1G[0K[preview:receiver:top-up] Using amountLovelace=30000000 for receiver top-up
+[preview:receiver:top-up] Loading client state from /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504-090006/clients/client-a.json
+[preview:receiver:top-up] Connecting to Preview and selecting the configured wallet
+[preview:receiver:top-up] Building Preview receiver top-up transaction
+[preview:receiver:top-up] Tx resources: fee=0.349581 ADA (349581 lovelace), cpu=76236842, mem=244876
+[preview:receiver:top-up] Unsigned transaction ready: ff4d6d9cbbaa4bad3a4790be56a1456c3218d013e674c9bb770171fc7c9101dd
+[preview:receiver:top-up] Submitted transaction hash: ff4d6d9cbbaa4bad3a4790be56a1456c3218d013e674c9bb770171fc7c9101dd

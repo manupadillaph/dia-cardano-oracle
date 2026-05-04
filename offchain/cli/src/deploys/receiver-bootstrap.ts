@@ -19,6 +19,7 @@ import {
   type ClientStateArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { awaitTxConfirmation } from "../core/tx-confirmation.js";
 import { readClientContext } from "../core/artifact-context.js";
 import { makeConfiguredLucid, selectConfiguredWallet } from "../core/lucid.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
@@ -207,7 +208,12 @@ export async function receiverBootstrap(args: {
     const signedTx = await txSignBuilder.sign.withWallet().complete();
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
-    confirmed = await lucid.awaitTx(submittedTxHash, 3_000);
+    confirmed = await awaitTxConfirmation({
+      lucid,
+      txHash: submittedTxHash,
+      reportProgress,
+      label: "receiver bootstrap transaction",
+    });
     if (!confirmed) {
       throw new Error(
         `Transaction ${submittedTxHash} was submitted but confirmation was not observed.`,

@@ -16,6 +16,7 @@ import {
   type ConfigStateArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { awaitTxConfirmation } from "../core/tx-confirmation.js";
 import {
   selectFundingUtxo,
   splitUnit,
@@ -89,7 +90,12 @@ export async function publishConfigReferenceScripts(args: {
     const signedTx = await txSignBuilder.sign.withWallet().complete();
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
-    confirmed = await lucid.awaitTx(submittedTxHash, 3_000);
+    confirmed = await awaitTxConfirmation({
+      lucid,
+      txHash: submittedTxHash,
+      reportProgress,
+      label: "config reference-script publish transaction",
+    });
     if (!confirmed) {
       throw new Error(
         `Transaction ${submittedTxHash} was submitted but confirmation was not observed.`,

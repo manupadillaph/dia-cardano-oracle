@@ -1,0 +1,54 @@
+{
+  "updates": [
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/btc-usd.json",
+      "intentPath": "./state/preview/intents/btc-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/eth-usd.json",
+      "intentPath": "./state/preview/intents/eth-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/ada-usd.json",
+      "intentPath": "./state/preview/intents/ada-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/usdt-usd.json",
+      "intentPath": "./state/preview/intents/usdt-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/dai-usd.json",
+      "intentPath": "./state/preview/intents/dai-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/sol-usd.json",
+      "intentPath": "./state/preview/intents/sol-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/bnb-usd.json",
+      "intentPath": "./state/preview/intents/bnb-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/xrp-usd.json",
+      "intentPath": "./state/preview/intents/xrp-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/matic-usd.json",
+      "intentPath": "./state/preview/intents/matic-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/dot-usd.json",
+      "intentPath": "./state/preview/intents/dot-usd-batch.signed.json",
+      "minUtxoLovelace": "5000000"
+    }
+  ]
+}

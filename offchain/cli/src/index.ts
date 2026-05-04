@@ -32,8 +32,8 @@ function printUsage(): void {
   npm run cli -- preview:wallet:utxos
   npm run cli -- preview:wallet:defaults
   npm run cli -- preview:ethereum-wallet:create
-  npm run cli -- preview:protocol:init [--out ./state/preview/config-bootstrap.json]
-  npm run cli -- preview:client:init [--state ./state/preview/config-bootstrap.json] [--client-id client-a] [--out ./state/preview/clients/client-a.json]
+  npm run cli -- preview:protocol:init [--use-defaults] [--out ./state/preview/config-bootstrap.json]
+  npm run cli -- preview:client:init [--state ./state/preview/config-bootstrap.json] [--client-id client-a] [--use-defaults] [--out ./state/preview/clients/client-a.json]
   npm run cli -- preview:intent:create [--state ./state/preview/config-bootstrap.json] [--out ./state/preview/intents/usdc-usd.unsigned.json]
   npm run cli -- preview:intent:sign [--input ./state/preview/intents/usdc-usd.unsigned.json] [--out ./state/preview/intents/usdc-usd.signed.json]
   npm run cli -- preview:intent:create-and-sign [--state ./state/preview/config-bootstrap.json] [--out ./state/preview/intents/usdc-usd.signed.json]
@@ -224,7 +224,9 @@ async function run(): Promise<void> {
     case "preview:protocol:init": {
       const { initializeProtocolState } = await import("./init/protocol-init.js");
       getCliConfig();
-      const result = await initializeProtocolState();
+      const result = await initializeProtocolState({
+        useDefaults: hasFlag("--use-defaults"),
+      });
       const outPath = optionalFlagValue("--out") ??
         await promptForText({
           message: "Protocol artifact output path",
@@ -246,6 +248,7 @@ async function run(): Promise<void> {
       const result = await initializeClientState({
         statePath,
         clientId: optionalFlagValue("--client-id"),
+        useDefaults: hasFlag("--use-defaults"),
       });
       const resolvedClientId =
         result.drafts?.receiverParameterize?.clientId ?? "client-a";

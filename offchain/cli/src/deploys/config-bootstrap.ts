@@ -27,6 +27,7 @@ import {
   type ConfigStateArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { awaitTxConfirmation } from "../core/tx-confirmation.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
@@ -210,7 +211,12 @@ export async function configBootstrap(args: {
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
     reportProgress("Waiting for transaction confirmation on Preview");
-    confirmed = await lucid.awaitTx(submittedTxHash, 3_000);
+    confirmed = await awaitTxConfirmation({
+      lucid,
+      txHash: submittedTxHash,
+      reportProgress,
+      label: "config bootstrap transaction",
+    });
 
     if (!confirmed) {
       throw new Error(
@@ -342,4 +348,3 @@ function resolveConfigBootstrapInput(
 function reportProgress(message: string): void {
   console.error(`[preview:config:bootstrap] ${message}`);
 }
-

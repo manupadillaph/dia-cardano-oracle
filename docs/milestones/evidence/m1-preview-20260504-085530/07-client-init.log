@@ -1,0 +1,45 @@
+
+> @protofire/dia-cardano-oracle-cli@0.1.0 cli
+> tsx src/index.ts preview:client:init --state ./state/preview_rerun_20260504-085530/config-bootstrap.json --client-id client-a --use-defaults --out ./state/preview_rerun_20260504-085530/clients/client-a.json
+
+[1G[0K[cli] Wrote JSON output to /home/manuelpadilla/sources/reposUbuntu/PROTOFIRE/DIA/dia-cardano-oracle/offchain/cli/state/preview_rerun_20260504-085530/clients/client-a.json
+{
+  "clientId": "client-a",
+  "scripts": {
+    "pairPolicyId": null,
+    "pairValidatorHash": null,
+    "pairValidatorAddress": null
+  },
+  "compiledScripts": {
+    "receiverMintPolicy": "",
+    "receiverValidator": "",
+    "pairMintPolicy": "",
+    "pairValidator": ""
+  },
+  "drafts": {
+    "receiverParameterize": {
+      "clientId": "client-a",
+      "receiverAssetLabel": "DIA_RECEIVER_CLIENT_A",
+      "receiverAssetName": "4449415f52454345495645525f434c49454e545f41",
+      "minUtxoLovelace": "3000000"
+    }
+  },
+  "referenceScripts": {
+    "client": {
+      "receiver": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      },
+      "pair": {
+        "txHash": "",
+        "outputIndex": 0,
+        "scriptHash": ""
+      }
+    }
+  },
+  "datum": {
+    "receiverCbor": ""
+  }
+}
+[1G[0K⠙[1G[0K

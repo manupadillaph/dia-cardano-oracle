@@ -19,6 +19,7 @@ import {
   type ReceiverArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { awaitTxConfirmation } from "../core/tx-confirmation.js";
 import { readClientContext } from "../core/artifact-context.js";
 import {
   buildReceiverDatumCbor,
@@ -114,7 +115,12 @@ export async function publishClientReferenceScripts(args: {
     const signedTx = await txSignBuilder.sign.withWallet().complete();
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
-    confirmed = await lucid.awaitTx(submittedTxHash, 3_000);
+    confirmed = await awaitTxConfirmation({
+      lucid,
+      txHash: submittedTxHash,
+      reportProgress,
+      label: "client reference-script publish transaction",
+    });
     if (!confirmed) {
       throw new Error(
         `Transaction ${submittedTxHash} was submitted but confirmation was not observed.`,

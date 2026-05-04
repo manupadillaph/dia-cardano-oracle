@@ -121,6 +121,7 @@ export function createClientStateArtifact(
 export async function initializeClientState(args: {
   statePath: string;
   clientId?: string;
+  useDefaults?: boolean;
 }): Promise<ClientStateArtifact> {
   const state = await readConfigState(args.statePath);
   if (!state.bootstrapRefs.config.txHash || !state.bootstrapRefs.paymentHook?.txHash) {
@@ -134,7 +135,9 @@ export async function initializeClientState(args: {
       "Client init requires protocol state after PaymentHook bootstrap.",
     );
   }
-  const receiverDefaults = await promptForReceiverDefaults(args.clientId ?? "client-a");
+  const receiverDefaults = args.useDefaults
+    ? defaultReceiverParameterizeDefaults(args.clientId ?? "client-a")
+    : await promptForReceiverDefaults(args.clientId ?? "client-a");
   return createClientStateArtifact(
     receiverDefaults.clientId,
     receiverDefaults,

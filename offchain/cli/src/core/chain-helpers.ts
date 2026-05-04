@@ -52,15 +52,26 @@ export async function findSingleUtxoAtUnit(
   unit: string,
   label: string,
 ): Promise<UTxO> {
+  let lastError: unknown = null;
+
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const utxos = await lucid.utxosAtWithUnit(address, unit);
-    if (utxos.length === 1) {
-      return utxos[0];
+    try {
+      const utxos = await lucid.utxosAtWithUnit(address, unit);
+      if (utxos.length === 1) {
+        return utxos[0];
+      }
+    } catch (error) {
+      lastError = error;
     }
     await new Promise((resolve) => setTimeout(resolve, 1_500));
   }
 
-  throw new Error(`Unable to observe a single ${label} UTxO at ${address} with unit ${unit}.`);
+  const detail = lastError
+    ? ` Last provider error: ${describeUnknownError(lastError)}.`
+    : "";
+  throw new Error(
+    `Unable to observe a single ${label} UTxO at ${address} with unit ${unit}.${detail}`,
+  );
 }
 
 export async function waitForUnitUtxoReplacement(args: {
@@ -74,18 +85,23 @@ export async function waitForUnitUtxoReplacement(args: {
 }): Promise<UTxO> {
   const maxAttempts = args.maxAttempts ?? 20;
   const delayMs = args.delayMs ?? 1_500;
+  let lastError: unknown = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const utxos = await args.lucid.utxosAtWithUnit(args.address, args.unit);
-    const replacement = utxos.find(
-      (utxo) =>
-        !args.previousOutRef ||
-        utxo.txHash !== args.previousOutRef.txHash ||
-        utxo.outputIndex !== args.previousOutRef.outputIndex,
-    );
+    try {
+      const utxos = await args.lucid.utxosAtWithUnit(args.address, args.unit);
+      const replacement = utxos.find(
+        (utxo) =>
+          !args.previousOutRef ||
+          utxo.txHash !== args.previousOutRef.txHash ||
+          utxo.outputIndex !== args.previousOutRef.outputIndex,
+      );
 
-    if (utxos.length === 1 && replacement) {
-      return replacement;
+      if (utxos.length === 1 && replacement) {
+        return replacement;
+      }
+    } catch (error) {
+      lastError = error;
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -94,8 +110,11 @@ export async function waitForUnitUtxoReplacement(args: {
   const previousSuffix = args.previousOutRef
     ? ` after consuming ${args.previousOutRef.txHash}#${args.previousOutRef.outputIndex}`
     : "";
+  const detail = lastError
+    ? ` Last provider error: ${describeUnknownError(lastError)}.`
+    : "";
   throw new Error(
-    `Transaction confirmation was observed, but the ${args.label} UTxO set did not refresh${previousSuffix}.`,
+    `Transaction confirmation was observed, but the ${args.label} UTxO set did not refresh${previousSuffix}.${detail}`,
   );
 }
 
@@ -197,22 +216,30 @@ export async function waitForWalletSettlement(args: {
   const previousSnapshot = utxoSnapshot(args.previousUtxos);
   const maxAttempts = args.maxAttempts ?? 12;
   const delayMs = args.delayMs ?? 1_500;
+  let lastError: unknown = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const currentUtxos = await args.wallet.getUtxos();
-    const currentSnapshot = utxoSnapshot(currentUtxos);
-    const spentInputsStillVisible = spentOutRefs.some((outRef) => currentSnapshot.has(outRef));
-    const walletChanged = !sameSnapshot(previousSnapshot, currentSnapshot);
+    try {
+      const currentUtxos = await args.wallet.getUtxos();
+      const currentSnapshot = utxoSnapshot(currentUtxos);
+      const spentInputsStillVisible = spentOutRefs.some((outRef) => currentSnapshot.has(outRef));
+      const walletChanged = !sameSnapshot(previousSnapshot, currentSnapshot);
 
-    if (!spentInputsStillVisible && walletChanged) {
-      return currentUtxos;
+      if (!spentInputsStillVisible && walletChanged) {
+        return currentUtxos;
+      }
+    } catch (error) {
+      lastError = error;
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
+  const detail = lastError
+    ? ` Last provider error: ${describeUnknownError(lastError)}.`
+    : "";
   throw new Error(
-    `Transaction confirmation was observed, but the wallet UTxO set did not refresh after ${args.label}.`,
+    `Transaction confirmation was observed, but the wallet UTxO set did not refresh after ${args.label}.${detail}`,
   );
 }
 
@@ -229,6 +256,10 @@ function selectablePureLovelaceUtxos(
           utxo.outputIndex === outRef.outputIndex,
       ),
   );
+}
+
+function describeUnknownError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function addressToPlutusData(address: string): Constr<PlutusData> {

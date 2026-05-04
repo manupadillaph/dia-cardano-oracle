@@ -1,0 +1,29 @@
+{
+  "updates": [
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/sol-usd.json",
+      "intentPath": "./state/preview/intents/sol-usd-batchB.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/bnb-usd.json",
+      "intentPath": "./state/preview/intents/bnb-usd-batchB.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/xrp-usd.json",
+      "intentPath": "./state/preview/intents/xrp-usd-batchB.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/matic-usd.json",
+      "intentPath": "./state/preview/intents/matic-usd-batchB.signed.json",
+      "minUtxoLovelace": "5000000"
+    },
+    {
+      "statePath": "./state/preview/clients/client-a/pairs/dot-usd.json",
+      "intentPath": "./state/preview/intents/dot-usd-batchB.signed.json",
+      "minUtxoLovelace": "5000000"
+    }
+  ]
+}

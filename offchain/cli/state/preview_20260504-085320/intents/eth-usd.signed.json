@@ -1,0 +1,21 @@
+{
+  "intent": {
+    "intentType": "OracleUpdate",
+    "version": "1.0",
+    "chainId": "100640",
+    "nonce": "1777879036650",
+    "expiry": "1777882636",
+    "symbol": "ETH/USD",
+    "price": "350000000000",
+    "timestamp": "1777879036",
+    "source": "DIA Oracle",
+    "signature": "0xcc81c6ff014622023951c48317b13ccf9035dd89e8c972910e0a233ff58c269b4971ad10a309f770112bc73d704b0ffbb32da85429d4f3cced181b6bdb1b19aa1b",
+    "signer": "0x2b1c7eff297766569966b630a6862947a8e5285a"
+  },
+  "witness": {
+    "signerPublicKey": "02d78ade9f8a9c064c8c588dba903df0cc0118596b9ec65f665dea1b448519f531",
+    "signerAddress": "0x2b1c7eff297766569966b630a6862947a8e5285a",
+    "intentHash": "e58ee36d6164f925cdc5ecc3dfb4ceb29e4bc585c8e80a8da260ea1cf24ea621",
+    "compactSignature": "cc81c6ff014622023951c48317b13ccf9035dd89e8c972910e0a233ff58c269b4971ad10a309f770112bc73d704b0ffbb32da85429d4f3cced181b6bdb1b19aa"
+  }
+}

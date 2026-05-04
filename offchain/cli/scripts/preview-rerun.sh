@@ -12,7 +12,7 @@ EVIDENCE_ROOT="$REPO/docs/milestones/evidence/${EVIDENCE_NAME}"
 TEMPLATE_INTENTS_DIR="${TEMPLATE_INTENTS_DIR:-$CLI_DIR/state/preview/intents}"
 BACKUP_NAME="${BACKUP_NAME:-preview_${RUN_ID}}"
 BACKUP_ROOT="$CLI_DIR/state/${BACKUP_NAME}"
-CARDANO_PROVIDER="${CARDANO_PROVIDER:-Koios}"
+CARDANO_PROVIDER="${CARDANO_PROVIDER:-Blockfrost}"
 
 mkdir -p "$CLI_DIR/state" "$REPO/docs/milestones/evidence"
 
@@ -30,6 +30,10 @@ mkdir -p \
 
 cd "$CLI_DIR"
 
+set -a
+source "$CLI_DIR/.env"
+set +a
+
 export CARDANO_PROVIDER
 
 echo "[rerun] fresh state root: $STATE_ROOT"
@@ -43,19 +47,8 @@ run_logged() {
   script -q -e -c "npm run cli -- $cli_cmd" /dev/null | tee "$EVIDENCE_ROOT/$log_name"
 }
 
-run_logged_defaults() {
-  local log_name="$1"
-  local line_count="$2"
-  shift 2
-  local cli_cmd="$*"
-  echo "[rerun] $cli_cmd"
-  awk -v n="$line_count" 'BEGIN { for (i = 0; i < n; i += 1) print "" }' \
-    | script -q -e -c "npm run cli -- $cli_cmd" /dev/null \
-    | tee "$EVIDENCE_ROOT/$log_name"
-}
-
-run_logged_defaults "00-protocol-init.log" 13 \
-  "preview:protocol:init --out $STATE_REL/config-bootstrap.json"
+run_logged "00-protocol-init.log" \
+  "preview:protocol:init --use-defaults --out $STATE_REL/config-bootstrap.json"
 
 run_logged "01-config-parameterize.log" \
   "preview:config:parameterize --state $STATE_REL/config-bootstrap.json"
@@ -71,8 +64,8 @@ run_logged "05-payment-hook-bootstrap.log" \
 run_logged "06-payment-hook-reference-script.log" \
   "preview:payment-hook:reference-script --lovelace-per-output 3000000 --state $STATE_REL/config-bootstrap.json"
 
-run_logged_defaults "07-client-init.log" 3 \
-  "preview:client:init --state $STATE_REL/config-bootstrap.json --client-id client-a --out $STATE_REL/clients/client-a.json"
+run_logged "07-client-init.log" \
+  "preview:client:init --state $STATE_REL/config-bootstrap.json --client-id client-a --use-defaults --out $STATE_REL/clients/client-a.json"
 
 run_logged "08-receiver-parameterize.log" \
   "preview:receiver:parameterize --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/client-a.json"

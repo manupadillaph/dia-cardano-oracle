@@ -294,7 +294,9 @@ async function promptForProtocolConfigInput(
   };
 }
 
-export async function initializeProtocolState(): Promise<ConfigStateArtifact> {
+export async function initializeProtocolState(args?: {
+  useDefaults?: boolean;
+}): Promise<ConfigStateArtifact> {
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const walletAddress = await lucid.wallet().address();
@@ -305,10 +307,12 @@ export async function initializeProtocolState(): Promise<ConfigStateArtifact> {
     source,
     address: walletAddress,
   });
-  const configInput = await promptForProtocolConfigInput(
-    walletDefaults.paymentKeyHash,
-    walletAddress,
-  );
+  const configInput = args?.useDefaults
+    ? defaultProtocolConfigInput(walletDefaults.paymentKeyHash, walletAddress)
+    : await promptForProtocolConfigInput(
+        walletDefaults.paymentKeyHash,
+        walletAddress,
+      );
 
   return createProtocolStateArtifact({
     source,

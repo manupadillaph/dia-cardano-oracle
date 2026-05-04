@@ -1,0 +1,53 @@
+{
+  "wallet": {
+    "source": "seed",
+    "address": "addr_test1qpgpsm75w7l9u6au7shqzsaulrtxz2gp6xw9zhun70es6tt4t3wsjavx26kmh586erf8xxhqc2y7urq5az32sjv56nyqquxj3j"
+  },
+  "pair": {
+    "tokenName": "0ae6401fc15363e085cf3d2f90ae10566e797d8686ab048ba30f5914c7ff2852",
+    "pairId": "4441492f555344",
+    "pairUnit": "d4ab2fa2ff14e1045358dfbad03382a4e46f569dcc78bdfe93a02d0b0ae6401fc15363e085cf3d2f90ae10566e797d8686ab048ba30f5914c7ff2852",
+    "pairValidatorAddress": "addr_test1wr22ktazlu2wzpzntr0m45pns2jwgm6knhx83007jwsz6zctjx355",
+    "stateUtxo": {
+      "txHash": "1a676b49f83b2dd7855eb1e34697f01ba383914e035120fdaf1d8363e75e1d35",
+      "outputIndex": 4
+    }
+  },
+  "pairState": {
+    "pairId": "4441492f555344",
+    "price": "100013000",
+    "timestamp": "1777879578",
+    "nonce": "1777879578432",
+    "intentHash": "b7ddce4a44b307550958505a3aa6f1a8f3151afd3f52b3c0f744da5640a0cd8f",
+    "signer": "2b1c7eff297766569966b630a6862947a8e5285a",
+    "minUtxoLovelace": "5000000",
+    "intent": {
+      "intentType": "OracleUpdate",
+      "version": "1.0",
+      "chainId": "100640",
+      "nonce": "1777879578432",
+      "expiry": "1777883178",
+      "symbol": "DAI/USD",
+      "price": "100013000",
+      "timestamp": "1777879578",
+      "source": "DIA Oracle",
+      "signature": "c525041dd149510a308a21bcea4694c98ade2ea4ad133b9dcccbb4e56d3916d151102e323c9f331d643254c8b0ea178a5e8db7b1aa150f0424289e058383f2981c",
+      "signer": "0x2b1c7eff297766569966b630a6862947a8e5285a"
+    }
+  },
+  "datum": {
+    "pairCbor": "d8799f474441492f5553441a05f613c81a69f84a1a1b0000019df1e177405820b7ddce4a44b307550958505a3aa6f1a8f3151afd3f52b3c0f744da5640a0cd8f542b1c7eff297766569966b630a6862947a8e5285a1a004c4b40ff"
+  },
+  "transactions": [
+    {
+      "step": "preview:update",
+      "submittedTxHash": "6b2a6364980188608e88f02ca905be69e96d67a8aaef1ba9b6c6ae2365f25d31",
+      "confirmed": true
+    },
+    {
+      "step": "preview:update:batch",
+      "submittedTxHash": "1a676b49f83b2dd7855eb1e34697f01ba383914e035120fdaf1d8363e75e1d35",
+      "confirmed": true
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import {
   type ConfigStateArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { awaitTxConfirmation } from "../core/tx-confirmation.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
@@ -226,7 +227,12 @@ export async function paymentHookBootstrap(args: {
     const signedTx = await txSignBuilder.sign.withWallet().complete();
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
-    confirmed = await lucid.awaitTx(submittedTxHash, 3_000);
+    confirmed = await awaitTxConfirmation({
+      lucid,
+      txHash: submittedTxHash,
+      reportProgress,
+      label: "payment-hook bootstrap transaction",
+    });
     if (!confirmed) {
       throw new Error(
         `Transaction ${submittedTxHash} was submitted but confirmation was not observed.`,
