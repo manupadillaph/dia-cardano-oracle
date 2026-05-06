@@ -15,7 +15,7 @@ usage: preview-rerun.sh [--clean-previous=true|false] [--from-step N] [--run-id 
 examples:
   preview-rerun.sh
   preview-rerun.sh --clean-previous=false
-  preview-rerun.sh --from-step 14 --run-id 20260506-030904
+  preview-rerun.sh --from-step 13 --run-id 20260506-030904
 EOF
 }
 
@@ -71,8 +71,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$FROM_STEP" =~ ^[0-9]+$ ]] || (( FROM_STEP < 1 || FROM_STEP > 29 )); then
-  echo "--from-step must be an integer between 1 and 29" >&2
+if ! [[ "$FROM_STEP" =~ ^[0-9]+$ ]] || (( FROM_STEP < 1 || FROM_STEP > 28 )); then
+  echo "--from-step must be an integer between 1 and 28" >&2
   exit 1
 fi
 
@@ -357,7 +357,7 @@ write_batch_manifest() {
     done
     printf '\n  ]\n}\n'
   } > "$manifest_path"
-  echo "[rerun] wrote $(basename "$manifest_path") with ${size} updates" | tee -a "$EVIDENCE_ROOT/25a-generate-batch-manifests.log"
+  echo "[rerun] wrote $(basename "$manifest_path") with ${size} updates" | tee -a "$EVIDENCE_ROOT/24a-generate-batch-manifests.log"
 }
 
 infer_success_batch_size() {
@@ -496,82 +496,76 @@ if should_run_step 12; then
 fi
 
 if should_run_step 13; then
-  cat <<'EOF' > "$EVIDENCE_ROOT/13-generate-intents.log"
-[rerun] Intents are generated just-in-time from network time before each update step.
-EOF
-fi
-
-if should_run_step 14; then
-  generate_signed_intent_now "14a-generate-usdc-usd-intent.log" "usdc-usd" "" "${BOOTSTRAP_PRICES["usdc-usd"]}"
-  run_tx_logged "14-update-usdc-bootstrap.log" \
+  generate_signed_intent_now "13a-generate-usdc-usd-intent.log" "usdc-usd" "" "${BOOTSTRAP_PRICES["usdc-usd"]}"
+  run_tx_logged "13-update-usdc-bootstrap.log" \
     "preview:update --intent $STATE_REL/intents/usdc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdc-usd.json"
 fi
-if should_run_step 15; then
-  generate_signed_intent_now "15a-generate-btc-usd-intent.log" "btc-usd" "" "${BOOTSTRAP_PRICES["btc-usd"]}"
-  run_tx_logged "15-bootstrap-btc-usd.log" \
+if should_run_step 14; then
+  generate_signed_intent_now "14a-generate-btc-usd-intent.log" "btc-usd" "" "${BOOTSTRAP_PRICES["btc-usd"]}"
+  run_tx_logged "14-bootstrap-btc-usd.log" \
     "preview:update --intent $STATE_REL/intents/btc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/btc-usd.json"
 fi
-if should_run_step 16; then
-  generate_signed_intent_now "16a-generate-eth-usd-intent.log" "eth-usd" "" "${BOOTSTRAP_PRICES["eth-usd"]}"
-  run_tx_logged "16-bootstrap-eth-usd.log" \
+if should_run_step 15; then
+  generate_signed_intent_now "15a-generate-eth-usd-intent.log" "eth-usd" "" "${BOOTSTRAP_PRICES["eth-usd"]}"
+  run_tx_logged "15-bootstrap-eth-usd.log" \
     "preview:update --intent $STATE_REL/intents/eth-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/eth-usd.json"
 fi
-if should_run_step 17; then
-  generate_signed_intent_now "17a-generate-ada-usd-intent.log" "ada-usd" "" "${BOOTSTRAP_PRICES["ada-usd"]}"
-  run_tx_logged "17-bootstrap-ada-usd.log" \
+if should_run_step 16; then
+  generate_signed_intent_now "16a-generate-ada-usd-intent.log" "ada-usd" "" "${BOOTSTRAP_PRICES["ada-usd"]}"
+  run_tx_logged "16-bootstrap-ada-usd.log" \
     "preview:update --intent $STATE_REL/intents/ada-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/ada-usd.json"
 fi
-if should_run_step 18; then
-  generate_signed_intent_now "18a-generate-usdt-usd-intent.log" "usdt-usd" "" "${BOOTSTRAP_PRICES["usdt-usd"]}"
-  run_tx_logged "18-bootstrap-usdt-usd.log" \
+if should_run_step 17; then
+  generate_signed_intent_now "17a-generate-usdt-usd-intent.log" "usdt-usd" "" "${BOOTSTRAP_PRICES["usdt-usd"]}"
+  run_tx_logged "17-bootstrap-usdt-usd.log" \
     "preview:update --intent $STATE_REL/intents/usdt-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdt-usd.json"
 fi
-if should_run_step 19; then
-  generate_signed_intent_now "19a-generate-dai-usd-intent.log" "dai-usd" "" "${BOOTSTRAP_PRICES["dai-usd"]}"
-  run_tx_logged "19-bootstrap-dai-usd.log" \
+if should_run_step 18; then
+  generate_signed_intent_now "18a-generate-dai-usd-intent.log" "dai-usd" "" "${BOOTSTRAP_PRICES["dai-usd"]}"
+  run_tx_logged "18-bootstrap-dai-usd.log" \
     "preview:update --intent $STATE_REL/intents/dai-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dai-usd.json"
 fi
-if should_run_step 20; then
-  generate_signed_intent_now "20a-generate-sol-usd-intent.log" "sol-usd" "" "${BOOTSTRAP_PRICES["sol-usd"]}"
-  run_tx_logged "20-bootstrap-sol-usd.log" \
+if should_run_step 19; then
+  generate_signed_intent_now "19a-generate-sol-usd-intent.log" "sol-usd" "" "${BOOTSTRAP_PRICES["sol-usd"]}"
+  run_tx_logged "19-bootstrap-sol-usd.log" \
     "preview:update --intent $STATE_REL/intents/sol-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/sol-usd.json"
 fi
-if should_run_step 21; then
-  generate_signed_intent_now "21a-generate-bnb-usd-intent.log" "bnb-usd" "" "${BOOTSTRAP_PRICES["bnb-usd"]}"
-  run_tx_logged "21-bootstrap-bnb-usd.log" \
+if should_run_step 20; then
+  generate_signed_intent_now "20a-generate-bnb-usd-intent.log" "bnb-usd" "" "${BOOTSTRAP_PRICES["bnb-usd"]}"
+  run_tx_logged "20-bootstrap-bnb-usd.log" \
     "preview:update --intent $STATE_REL/intents/bnb-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/bnb-usd.json"
 fi
-if should_run_step 22; then
-  generate_signed_intent_now "22a-generate-xrp-usd-intent.log" "xrp-usd" "" "${BOOTSTRAP_PRICES["xrp-usd"]}"
-  run_tx_logged "22-bootstrap-xrp-usd.log" \
+if should_run_step 21; then
+  generate_signed_intent_now "21a-generate-xrp-usd-intent.log" "xrp-usd" "" "${BOOTSTRAP_PRICES["xrp-usd"]}"
+  run_tx_logged "21-bootstrap-xrp-usd.log" \
     "preview:update --intent $STATE_REL/intents/xrp-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/xrp-usd.json"
 fi
-if should_run_step 23; then
-  generate_signed_intent_now "23a-generate-matic-usd-intent.log" "matic-usd" "" "${BOOTSTRAP_PRICES["matic-usd"]}"
-  run_tx_logged "23-bootstrap-matic-usd.log" \
+if should_run_step 22; then
+  generate_signed_intent_now "22a-generate-matic-usd-intent.log" "matic-usd" "" "${BOOTSTRAP_PRICES["matic-usd"]}"
+  run_tx_logged "22-bootstrap-matic-usd.log" \
     "preview:update --intent $STATE_REL/intents/matic-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/matic-usd.json"
 fi
-if should_run_step 24; then
-  generate_signed_intent_now "24a-generate-dot-usd-intent.log" "dot-usd" "" "${BOOTSTRAP_PRICES["dot-usd"]}"
-  run_tx_logged "24-bootstrap-dot-usd.log" \
+if should_run_step 23; then
+  generate_signed_intent_now "23a-generate-dot-usd-intent.log" "dot-usd" "" "${BOOTSTRAP_PRICES["dot-usd"]}"
+  run_tx_logged "23-bootstrap-dot-usd.log" \
     "preview:update --intent $STATE_REL/intents/dot-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dot-usd.json"
 fi
 
-if should_run_step 25; then
-  run_tx_logged "25-receiver-top-up-2.log" \
+if should_run_step 24; then
+  run_tx_logged "24-receiver-top-up-2.log" \
     "preview:receiver:top-up --amount-lovelace $RECEIVER_TOP_UP_2_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 
-if should_run_step 26; then
-  generate_batch_signed_intents_now "25b-generate-batch-intents.log"
-  : > "$EVIDENCE_ROOT/25a-generate-batch-manifests.log"
+if should_run_step 25; then
+  generate_batch_signed_intents_now "24b-generate-batch-intents.log"
+  : > "$EVIDENCE_ROOT/24a-generate-batch-manifests.log"
   for size in 10 9 8 7 6 5; do
     write_batch_manifest "$size"
   done
 
   SUCCESS_BATCH_SIZE=""
   for size in 10 9 8 7 6; do
-    log_name="26-update-batch-${size}.log"
+    log_name="25-update-batch-${size}.log"
     result_root="$STATE_ROOT/update-batches/batch-${size}.result.json"
     rm -f "$result_root"
     if run_tx_logged "$log_name" \
@@ -587,10 +581,10 @@ if should_run_step 26; then
   if [[ -z "$SUCCESS_BATCH_SIZE" ]]; then
     result_root="$STATE_ROOT/update-batches/batch-5.result.json"
     rm -f "$result_root"
-    run_tx_logged "26-update-batch-5.log" \
+    run_tx_logged "25-update-batch-5.log" \
       "preview:update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-5.manifest.json --out $STATE_REL/update-batches/batch-5.result.json"
     if [[ ! -s "$result_root" ]]; then
-      echo "[rerun] batch-5 did not produce a result artifact; aborting rerun" | tee -a "$EVIDENCE_ROOT/26-update-batch-5.log"
+      echo "[rerun] batch-5 did not produce a result artifact; aborting rerun" | tee -a "$EVIDENCE_ROOT/25-update-batch-5.log"
       exit 1
     fi
     SUCCESS_BATCH_SIZE="5"
@@ -607,16 +601,16 @@ else
   )"
 fi
 
-if should_run_step 27; then
-  run_tx_logged "27-settle.log" \
+if should_run_step 26; then
+  run_tx_logged "26-settle.log" \
     "preview:settle --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
-if should_run_step 28; then
-  run_tx_logged "28-receiver-withdraw.log" \
+if should_run_step 27; then
+  run_tx_logged "27-receiver-withdraw.log" \
     "preview:receiver:withdraw --amount-lovelace $RECEIVER_WITHDRAW_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
-if should_run_step 29; then
-  run_tx_logged "29-payment-hook-withdraw.log" \
+if should_run_step 28; then
+  run_tx_logged "28-payment-hook-withdraw.log" \
     "preview:payment-hook:withdraw --amount-lovelace $PAYMENT_HOOK_WITHDRAW_LOVELACE --state $STATE_REL/config-bootstrap.json"
 fi
 

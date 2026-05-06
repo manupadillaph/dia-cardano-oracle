@@ -10,11 +10,33 @@ export type NetworkNow = {
   unixTimeSec: bigint;
 };
 
-export function getNetworkNow(
+async function fetchBlockfrostTipSlot(apiUrl: string, projectId: string): Promise<number> {
+  const response = await fetch(`${apiUrl}/blocks/latest`, {
+    headers: { project_id: projectId },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Blockfrost /blocks/latest failed (${response.status} ${response.statusText})`,
+    );
+  }
+  const block = (await response.json()) as { slot: number };
+  return block.slot;
+}
+
+export async function getNetworkNow(
   lucid: Awaited<ReturnType<typeof import("./lucid.js").makeConfiguredLucid>>,
-): NetworkNow {
-  const slot = lucid.currentSlot();
-  const network = lucid.config().network ?? getCliConfig().cardanoNetwork;
+): Promise<NetworkNow> {
+  const config = getCliConfig();
+  let slot: number;
+
+  if (config.cardanoProvider === "Blockfrost") {
+    slot = await fetchBlockfrostTipSlot(config.blockfrostApiUrl, config.blockfrostProjectId);
+  } else {
+    slot = lucid.currentSlot();
+  }
+
+  const network = lucid.config().network ?? config.cardanoNetwork;
   const unixTimeMs = Number(slotToUnixTime(network, slot));
 
   return {
@@ -34,16 +56,16 @@ export function slotBackoffUnixTimeMs(
   return Number(slotToUnixTime(network, safeSlot));
 }
 
-export function resolveIntentTimingFromNetwork(args: {
+export async function resolveIntentTimingFromNetwork(args: {
   lucid: Awaited<ReturnType<typeof import("./lucid.js").makeConfiguredLucid>>;
   expirySeconds: bigint;
   nonceBump?: bigint;
-}): {
+}): Promise<{
   timestamp: string;
   expiry: string;
   nonce: string;
-} {
-  const now = getNetworkNow(args.lucid);
+}> {
+  const now = await getNetworkNow(args.lucid);
   const nonceBump = args.nonceBump ?? 0n;
   const timestamp = now.unixTimeSec.toString();
   const expiry = (now.unixTimeSec + args.expirySeconds).toString();

@@ -284,6 +284,8 @@ export async function submitBatchOracleUpdate(args: {
     verifyingContract: state.configState.domain.verifyingContract,
   });
 
+  const networkNow = await getNetworkNow(lucid);
+
   const preparedUpdates = states.map(({ entry, artifact, intent: loadedIntent, isCreate }) => {
     const intent = normalizeDiaOracleIntent(loadedIntent);
     const witness = recoverDiaOracleIntentWitness(domain, intent);
@@ -311,7 +313,6 @@ export async function submitBatchOracleUpdate(args: {
       batchStatePath: entry.statePath,
     });
 
-    const networkNow = getNetworkNow(lucid);
     assertDiaOracleIntentNotExpired(intent, networkNow.unixTimeSec);
 
     const nextPairState = {
@@ -389,7 +390,6 @@ export async function submitBatchOracleUpdate(args: {
   // Finite tx validity range required by the on-chain coordinator
   // (intent_expiry_satisfied) and pair_state.pair_intent_satisfied.
   // Cap upper bound below the earliest intent expiry in the batch.
-  const networkNow = getNetworkNow(lucid);
   const earliestExpirySec = preparedUpdates.reduce(
     (min, u) => (u.intent.expiry < min ? u.intent.expiry : min),
     preparedUpdates[0].intent.expiry,

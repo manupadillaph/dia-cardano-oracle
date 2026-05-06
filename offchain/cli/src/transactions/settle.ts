@@ -268,7 +268,7 @@ export async function settleAccruedFees(args: {
   // Settle does not consume an intent, but the coordinator's
   // ApplySettle path still runs alongside other validators that may
   // require finite bounds (defence in depth). A 30-min window is safe.
-  const networkNow = getNetworkNow(lucid);
+  const networkNow = await getNetworkNow(lucid);
   let txBuilder = lucid
     .newTx()
     .validFrom(slotBackoffUnixTimeMs(lucid, networkNow.slot))

@@ -76,7 +76,7 @@ async function resolvePromptDefaults(statePath?: string): Promise<PromptDefaults
 
   const lucid = await makeConfiguredLucid();
   await selectConfiguredWallet(lucid);
-  const timing = resolveIntentTimingFromNetwork({
+  const timing = await resolveIntentTimingFromNetwork({
     lucid,
     expirySeconds: 3600n,
   });

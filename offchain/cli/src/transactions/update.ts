@@ -305,7 +305,7 @@ export async function submitOracleUpdate(args: {
     pairStateNonce: state.pairState.nonce,
   });
 
-  const networkNow = getNetworkNow(lucid);
+  const networkNow = await getNetworkNow(lucid);
   assertDiaOracleIntentNotExpired(intent, networkNow.unixTimeSec);
 
   const nextPairState = {
