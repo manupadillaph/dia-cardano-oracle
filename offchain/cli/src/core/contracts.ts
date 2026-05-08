@@ -176,11 +176,17 @@ export async function makeCoordinatorValidator(args: {
   };
 }
 
-export async function makeReferenceHolderValidator(): Promise<SpendingValidator> {
+export async function makeReferenceHolderValidator(args: {
+  configPolicyId: string;
+  configAssetName: string;
+}): Promise<SpendingValidator> {
   const validator = await getBlueprintValidator(REFERENCE_HOLDER_SPEND_TITLE);
   return {
     type: "PlutusV3",
-    script: validator.compiledCode!,
+    script: applyParamsToScript(validator.compiledCode!, [
+      args.configPolicyId,
+      args.configAssetName,
+    ]),
   };
 }
 

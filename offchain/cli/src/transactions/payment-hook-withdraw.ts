@@ -1,9 +1,8 @@
 import path from "node:path";
-import { Constr, type OutRef } from "@lucid-evolution/lucid";
+import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
 import {
-  makePaymentHookValidator,
   spendingValidatorFromCompiledScript,
 } from "../core/contracts.js";
 import {
@@ -28,7 +27,6 @@ import {
   buildPaymentHookDatumCbor,
   decodePaymentHookDatum,
   findSingleUtxoAtUnit,
-  splitUnit,
   toBigInt,
   waitForWalletSettlement,
   waitForUnitUtxoReplacement,
@@ -88,16 +86,10 @@ export async function paymentHookWithdraw(args: {
       "payment hook",
     ),
   ]);
-  const configAssetName = splitUnit(state.scripts.configUnit).assetName;
-  const paymentHookValidator = state.compiledScripts?.paymentHookValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator)
-    : await makePaymentHookValidator({
-        bootstrapOutRef: state.bootstrapRefs.paymentHook as OutRef,
-        assetName: splitUnit(state.scripts.paymentHookUnit!).assetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-        coordinatorCredentialHash: state.scripts.coordinatorHash,
-      });
+  if (!state.compiledScripts?.paymentHookValidator) {
+    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+  }
+  const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
 
   const amountLovelace = toBigInt(args.amountLovelace, "amountLovelace");
   assertPaymentHookWithdrawAmountPositive(amountLovelace);

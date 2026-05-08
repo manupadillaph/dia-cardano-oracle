@@ -65,7 +65,7 @@ export async function emulatorSubmitAndMine(
 export async function makeReferenceHolderScriptRefGenesisAccount(
   lovelace: bigint,
 ): Promise<EmulatorAccount> {
-  const validator = await makeReferenceHolderValidator();
+  const validator = await makeReferenceHolderValidator({ configPolicyId: "00", configAssetName: "00" });
   const base = generateEmulatorAccount({ lovelace });
   return { ...base, outputData: { scriptRef: validator } };
 }

@@ -1,9 +1,6 @@
 import path from "node:path";
 
 import {
-  makePaymentHookValidator,
-  makeReferenceHolderValidator,
-  scriptAddressFromValidator,
   scriptHashFromValidator,
   spendingValidatorFromCompiledScript,
 } from "../core/contracts.js";
@@ -21,7 +18,6 @@ import {
 } from "../core/output-logging.js";
 import {
   selectFundingUtxo,
-  splitUnit,
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 
@@ -34,6 +30,9 @@ export async function publishPaymentHookReferenceScript(args: {
   if (!state.bootstrapRefs.paymentHook || !state.scripts.paymentHookUnit) {
     throw new Error("PaymentHook reference-script publish requires the selected PaymentHook bootstrap reference.");
   }
+  if (!state.scripts.referenceHolderAddress) {
+    throw new Error("PaymentHook reference-script publish requires config parameterization first (run preview:config:parameterize).");
+  }
 
   reportProgress("Connecting to Preview and selecting the configured wallet");
   const lucid = await makeConfiguredLucid();
@@ -43,18 +42,11 @@ export async function publishPaymentHookReferenceScript(args: {
     wallet.address(),
     wallet.getUtxos(),
   ]);
-  const configAssetName = splitUnit(state.scripts.configUnit).assetName;
-  const paymentHookAssetName = splitUnit(state.scripts.paymentHookUnit).assetName;
-  const paymentHookValidator = state.compiledScripts?.paymentHookValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator)
-    : await makePaymentHookValidator({
-        bootstrapOutRef: state.bootstrapRefs.paymentHook,
-        assetName: paymentHookAssetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-        coordinatorCredentialHash: state.scripts.coordinatorHash,
-      });
-  const referenceAddress = scriptAddressFromValidator(await makeReferenceHolderValidator());
+  if (!state.compiledScripts.paymentHookValidator) {
+    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+  }
+  const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
+  const referenceAddress = state.scripts.referenceHolderAddress;
   const coinsPerUtxoByte = lucid.config().protocolParameters?.coinsPerUtxoByte;
   if (!coinsPerUtxoByte) {
     throw new Error("Lucid protocol parameters did not expose coinsPerUtxoByte.");
@@ -117,7 +109,6 @@ export async function publishPaymentHookReferenceScript(args: {
       source,
       address: walletAddress,
     },
-    referenceHolderAddress: referenceAddress,
     referenceScripts: {
       ...state.referenceScripts,
       global: {

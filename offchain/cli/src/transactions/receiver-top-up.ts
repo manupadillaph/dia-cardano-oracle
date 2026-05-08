@@ -3,7 +3,6 @@ import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
-  makeReceiverValidator,
   spendingValidatorFromCompiledScript,
 } from "../core/contracts.js";
 import {
@@ -26,7 +25,6 @@ import {
   buildReceiverDatumCbor,
   decodeReceiverDatum,
   findSingleUtxoAtUnit,
-  splitUnit,
   toBigInt,
   waitForWalletSettlement,
   waitForUnitUtxoReplacement,
@@ -66,15 +64,10 @@ export async function receiverTopUp(args: {
     state.receiver.receiverUnit,
     "receiver",
   );
-  const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
-  const receiverValidator = state.compiledScripts?.receiverValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator)
-    : await makeReceiverValidator({
-        bootstrapOutRef: state.receiver.bootstrapRef,
-        assetName: state.receiver.receiverAssetName,
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts?.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
 
   const amountLovelace = toBigInt(args.amountLovelace, "amountLovelace");
   assertReceiverTopUpAmountPositive(amountLovelace);

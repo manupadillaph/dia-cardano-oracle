@@ -4,10 +4,6 @@ import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
 import {
-  makeCoordinatorValidator,
-  makePairStateMintingPolicy,
-  makePairStateValidator,
-  makeReceiverValidator,
   mintingPolicyFromCompiledScript,
   policyIdFromMintingPolicy,
   spendingValidatorFromCompiledScript,
@@ -122,7 +118,6 @@ export async function submitBatchOracleUpdate(args: {
     clientStatePath: path.resolve(args.clientStatePath),
     protocolStatePath: path.resolve(args.protocolStatePath),
   });
-  const configAssetName = splitUnit(context.protocol.scripts.configUnit).assetName;
   if (!context.client.receiver) {
     throw new Error("Batch update requires client state after Receiver bootstrap.");
   }
@@ -134,21 +129,15 @@ export async function submitBatchOracleUpdate(args: {
     throw new Error("Batch update requires client state after Receiver/Pair parameterization.");
   }
   assertOracleUpdateBootstrapRefsResolved(context.protocol.bootstrapRefs);
-  const pairMintPolicy = context.client.compiledScripts?.pairMintPolicy
-    ? mintingPolicyFromCompiledScript(context.client.compiledScripts.pairMintPolicy)
-    : await makePairStateMintingPolicy({
-        configPolicyId: context.protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: context.client.receiver.receiverValidatorHash,
-      });
+  if (!context.client.compiledScripts.pairMintPolicy) {
+    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairMintPolicy = mintingPolicyFromCompiledScript(context.client.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
-  const pairValidator = context.client.compiledScripts?.pairValidator
-    ? spendingValidatorFromCompiledScript(context.client.compiledScripts.pairValidator)
-    : await makePairStateValidator({
-        configPolicyId: context.protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: context.client.receiver.receiverValidatorHash,
-      });
+  if (!context.client.compiledScripts.pairValidator) {
+    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairValidator = spendingValidatorFromCompiledScript(context.client.compiledScripts.pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
 
   const states = await Promise.all(
@@ -229,6 +218,16 @@ export async function submitBatchOracleUpdate(args: {
               }
             : null,
         },
+        {
+          key: "pairMint",
+          label: "pairMint",
+          outRef: state.referenceScripts?.client?.pairMint
+            ? {
+                txHash: state.referenceScripts.client.pairMint.txHash,
+                outputIndex: state.referenceScripts.client.pairMint.outputIndex,
+              }
+            : null,
+        },
       ] as const,
       reportProgress,
     );
@@ -257,25 +256,19 @@ export async function submitBatchOracleUpdate(args: {
     throw new Error("Pair validator hash does not match the current blueprint.");
   }
 
-  const receiverValidator = state.compiledScripts?.receiverValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator)
-    : await makeReceiverValidator({
-        bootstrapOutRef: state.receiver.bootstrapRef,
-        assetName: state.receiver.receiverAssetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
   if (receiverValidatorHash !== state.receiver.receiverValidatorHash) {
     throw new Error("Receiver validator hash does not match the current blueprint.");
   }
 
-  const coordinatorValidator = state.compiledScripts?.coordinatorValidator
-    ? withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator)
-    : await makeCoordinatorValidator({
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts.coordinatorValidator) {
+    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
 
   const domain = normalizeDiaEip712Domain({
     name: state.configState.domain.name,
@@ -431,9 +424,11 @@ export async function submitBatchOracleUpdate(args: {
     }
   }
   if (Object.keys(mintAssets).length > 0) {
-    txBuilder = txBuilder
-      .attach.MintingPolicy(pairMintPolicy)
-      .mintAssets(mintAssets, Data.to(new Constr<PlutusData>(0, [])));
+    txBuilder = txBuilder.mintAssets(mintAssets, Data.to(new Constr<PlutusData>(0, [])));
+    if (missingReferenceScripts.pairMint) {
+      reportProgress("Reference script for pairMint is missing on-chain; attaching the pair minting policy inline.");
+      txBuilder = txBuilder.attach.MintingPolicy(pairMintPolicy);
+    }
   }
 
   for (const { artifact, nextPairState } of preparedUpdates) {

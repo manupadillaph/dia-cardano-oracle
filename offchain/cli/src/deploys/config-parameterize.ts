@@ -80,6 +80,7 @@ export async function parameterizeConfigScripts(args: {
     configAssetName: splitUnit(configUnit).assetName,
   });
   const coordinatorHash = scriptHashFromValidator(coordinatorValidator);
+  const referenceHolderValidator = await makeReferenceHolderValidator({ configPolicyId, configAssetName });
   const configState = {
     validConfigSigners: resolvedInput.validConfigSigners.map((value) =>
       normalizeHex(value, "validConfigSigners[]"),
@@ -114,9 +115,6 @@ export async function parameterizeConfigScripts(args: {
       source,
       address: walletAddress,
     },
-    referenceHolderAddress:
-      previousState?.referenceHolderAddress ??
-      scriptAddressFromValidator(await makeReferenceHolderValidator()),
     bootstrapRefs: {
       config: bootstrapRef,
       paymentHook: previousState?.bootstrapRefs.paymentHook ?? null,
@@ -128,10 +126,12 @@ export async function parameterizeConfigScripts(args: {
       configValidatorAddress: scriptAddressFromValidator(configValidator),
       coordinatorHash,
       coordinatorRewardAddress: scriptRewardAddress(coordinatorHash),
-      paymentHookPolicyId: previousState?.scripts.paymentHookPolicyId ?? null,
-      paymentHookUnit: previousState?.scripts.paymentHookUnit ?? null,
-      paymentHookValidatorHash: previousState?.scripts.paymentHookValidatorHash ?? null,
-      paymentHookValidatorAddress: previousState?.scripts.paymentHookValidatorAddress ?? null,
+      referenceHolderValidatorHash: scriptHashFromValidator(referenceHolderValidator),
+      referenceHolderAddress: scriptAddressFromValidator(referenceHolderValidator),
+      paymentHookPolicyId: previousState?.scripts.paymentHookPolicyId ?? "",
+      paymentHookUnit: previousState?.scripts.paymentHookUnit ?? "",
+      paymentHookValidatorHash: previousState?.scripts.paymentHookValidatorHash ?? "",
+      paymentHookValidatorAddress: previousState?.scripts.paymentHookValidatorAddress ?? "",
     },
     configState,
     paymentHookState: previousState?.paymentHookState ?? null,
@@ -140,6 +140,7 @@ export async function parameterizeConfigScripts(args: {
       configMintPolicy: configMintPolicy.script,
       configValidator: configValidator.script,
       coordinatorValidator: coordinatorValidator.script,
+      referenceHolderValidator: referenceHolderValidator.script,
     },
     drafts: {
       ...previousState?.drafts,

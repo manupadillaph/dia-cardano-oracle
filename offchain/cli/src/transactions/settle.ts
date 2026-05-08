@@ -1,13 +1,9 @@
 import path from "node:path";
-import { Constr, type OutRef } from "@lucid-evolution/lucid";
+import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
 import {
-  makeCoordinatorValidator,
-  makePaymentHookValidator,
-  makeReceiverValidator,
   spendingValidatorFromCompiledScript,
-  scriptHashFromValidator,
   withdrawalValidatorFromCompiledScript,
 } from "../core/contracts.js";
 import {
@@ -108,8 +104,6 @@ export async function settleAccruedFees(args: {
     },
   );
 
-  const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
-
   // Fetch on-chain UTxOs
   const [currentConfigUtxo, currentReceiverUtxo, currentPaymentHookUtxo] =
     await Promise.all([
@@ -199,31 +193,20 @@ export async function settleAccruedFees(args: {
   );
 
   // --- Build validators ---
-  const receiverValidator = clientState.compiledScripts?.receiverValidator
-    ? spendingValidatorFromCompiledScript(clientState.compiledScripts.receiverValidator)
-    : await makeReceiverValidator({
-        bootstrapOutRef: clientState.receiver.bootstrapRef,
-        assetName: clientState.receiver.receiverAssetName,
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!clientState.compiledScripts?.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(clientState.compiledScripts.receiverValidator);
 
-  const paymentHookValidator = protocol.compiledScripts?.paymentHookValidator
-    ? spendingValidatorFromCompiledScript(protocol.compiledScripts.paymentHookValidator)
-    : await makePaymentHookValidator({
-        bootstrapOutRef: protocolState.bootstrapRefs.paymentHook as OutRef,
-        assetName: splitUnit(protocol.scripts.paymentHookUnit!).assetName,
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        coordinatorCredentialHash: protocol.scripts.coordinatorHash,
-      });
+  if (!protocol.compiledScripts?.paymentHookValidator) {
+    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+  }
+  const paymentHookValidator = spendingValidatorFromCompiledScript(protocol.compiledScripts.paymentHookValidator);
 
-  const coordinatorValidator = protocol.compiledScripts?.coordinatorValidator
-    ? withdrawalValidatorFromCompiledScript(protocol.compiledScripts.coordinatorValidator)
-    : await makeCoordinatorValidator({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!protocol.compiledScripts?.coordinatorValidator) {
+    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const coordinatorValidator = withdrawalValidatorFromCompiledScript(protocol.compiledScripts.coordinatorValidator);
 
   // --- Load reference scripts ---
   const { utxos: referenceScriptUtxos, missing: missingReferenceScripts } =

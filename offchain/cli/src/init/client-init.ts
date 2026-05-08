@@ -91,9 +91,9 @@ export function createClientStateArtifact(
   return {
     clientId,
     scripts: {
-      pairPolicyId: null,
-      pairValidatorHash: null,
-      pairValidatorAddress: null,
+      pairPolicyId: "",
+      pairValidatorHash: "",
+      pairValidatorAddress: "",
     },
     compiledScripts: emptyClientCompiledScripts(),
     drafts: {
@@ -103,6 +103,7 @@ export function createClientStateArtifact(
       client: {
         receiver: emptyReferenceScriptUtxo(),
         pair: emptyReferenceScriptUtxo(),
+        pairMint: emptyReferenceScriptUtxo(),
       },
     },
     datum: {

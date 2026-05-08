@@ -3,10 +3,6 @@ import { Constr, type OutRef, type UTxO } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
-  makeReceiverMintingPolicy,
-  makeReceiverValidator,
-  makePairStateMintingPolicy,
-  makePairStateValidator,
   mintingPolicyFromCompiledScript,
   policyIdFromMintingPolicy,
   scriptAddressFromValidator,
@@ -31,7 +27,6 @@ import {
   findUtxoByOutRef,
   selectBootstrapUtxo,
   selectFundingUtxo,
-  splitUnit,
   toBigInt,
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
@@ -97,7 +92,6 @@ export async function receiverBootstrap(args: {
     throw new Error("No suitable wallet UTxO is available for receiver bootstrap.");
   }
 
-  const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
   const receiverAssetName = normalizeHex(
     resolvedInput.receiverAssetName,
     "receiverAssetName",
@@ -110,43 +104,30 @@ export async function receiverBootstrap(args: {
     outputIndex: receiverBootstrapUtxo.outputIndex,
   };
 
-  const receiverMintPolicy = state.compiledScripts?.receiverMintPolicy
-    ? mintingPolicyFromCompiledScript(state.compiledScripts.receiverMintPolicy)
-    : await makeReceiverMintingPolicy({
-        bootstrapOutRef: receiverBootstrapOutRef,
-        assetName: receiverAssetName,
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts?.receiverMintPolicy) {
+    throw new Error("receiverMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.receiverMintPolicy);
   const receiverPolicyId = policyIdFromMintingPolicy(receiverMintPolicy);
   const receiverUnit = `${receiverPolicyId}${receiverAssetName}`;
 
-  const receiverValidator = state.compiledScripts?.receiverValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator)
-    : await makeReceiverValidator({
-        bootstrapOutRef: receiverBootstrapOutRef,
-        assetName: receiverAssetName,
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts?.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
   const receiverValidatorAddress = scriptAddressFromValidator(receiverValidator);
 
-  const pairMintPolicy = state.compiledScripts?.pairMintPolicy
-    ? mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy)
-    : await makePairStateMintingPolicy({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: receiverValidatorHash,
-      });
+  if (!state.compiledScripts?.pairMintPolicy) {
+    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
-  const pairValidator = state.compiledScripts?.pairValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator)
-    : await makePairStateValidator({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: receiverValidatorHash,
-      });
+
+  if (!state.compiledScripts?.pairValidator) {
+    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
 

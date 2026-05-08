@@ -5,10 +5,6 @@ import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
 import {
-  makeCoordinatorValidator,
-  makePairStateMintingPolicy,
-  makePairStateValidator,
-  makeReceiverValidator,
   mintingPolicyFromCompiledScript,
   spendingValidatorFromCompiledScript,
   policyIdFromMintingPolicy,
@@ -109,24 +105,17 @@ export async function submitOracleUpdate(args: {
     reportProgress(`Removed stale pair state file ${statePath}`);
     existingPair = null;
   }
-  const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
-  const pairMintPolicy = client.compiledScripts?.pairMintPolicy
-    ? mintingPolicyFromCompiledScript(client.compiledScripts.pairMintPolicy)
-    : await makePairStateMintingPolicy({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: client.receiver.receiverValidatorHash,
-      });
+  if (!client.compiledScripts.pairMintPolicy) {
+    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairMintPolicy = mintingPolicyFromCompiledScript(client.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
   const pairTokenName = diaIntentTokenNameFromSymbol(intent);
   const pairUnit = `${pairPolicyId}${pairTokenName}`;
-  const pairValidator = client.compiledScripts?.pairValidator
-    ? spendingValidatorFromCompiledScript(client.compiledScripts.pairValidator)
-    : await makePairStateValidator({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: client.receiver.receiverValidatorHash,
-      });
+  if (!client.compiledScripts.pairValidator) {
+    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairValidator = spendingValidatorFromCompiledScript(client.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
   const pairId = diaPairIdHex(intent);
@@ -223,6 +212,16 @@ export async function submitOracleUpdate(args: {
               }
             : null,
         },
+        {
+          key: "pairMint",
+          label: "pairMint",
+          outRef: state.referenceScripts?.client?.pairMint
+            ? {
+                txHash: state.referenceScripts.client.pairMint.txHash,
+                outputIndex: state.referenceScripts.client.pairMint.outputIndex,
+              }
+            : null,
+        },
       ] as const,
       reportProgress,
     );
@@ -261,20 +260,14 @@ export async function submitOracleUpdate(args: {
     throw new Error("Pair validator hash does not match the current blueprint.");
   }
 
-  const coordinatorValidator = state.compiledScripts?.coordinatorValidator
-    ? withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator)
-    : await makeCoordinatorValidator({
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-      });
-  const receiverValidator = state.compiledScripts?.receiverValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator)
-    : await makeReceiverValidator({
-        bootstrapOutRef: state.receiver.bootstrapRef,
-        assetName: state.receiver.receiverAssetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-      });
+  if (!state.compiledScripts.coordinatorValidator) {
+    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
+  if (!state.compiledScripts.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
   if (receiverValidatorHash !== state.receiver.receiverValidatorHash) {
     throw new Error("Receiver validator hash does not match the current blueprint.");
@@ -389,9 +382,11 @@ export async function submitOracleUpdate(args: {
     );
 
   if (isCreate) {
-    txBuilder = txBuilder
-      .attach.MintingPolicy(pairMintPolicy)
-      .mintAssets({ [state.pair.pairUnit]: 1n }, pairMintRedeemer);
+    txBuilder = txBuilder.mintAssets({ [state.pair.pairUnit]: 1n }, pairMintRedeemer);
+    if (missingReferenceScripts.pairMint) {
+      reportProgress("Reference script for pairMint is missing on-chain; attaching the pair minting policy inline.");
+      txBuilder = txBuilder.attach.MintingPolicy(pairMintPolicy);
+    }
   } else {
     txBuilder = txBuilder.collectFrom([currentPairUtxo!], pairRedeemer);
   }
@@ -406,8 +401,7 @@ export async function submitOracleUpdate(args: {
   }
   if (!isCreate && missingReferenceScripts.pair) {
     reportProgress("Reference script for pair is missing on-chain; attaching the pair validator inline.");
-    txBuilder = txBuilder
-      .attach.SpendingValidator(pairValidator);
+    txBuilder = txBuilder.attach.SpendingValidator(pairValidator);
   }
 
   const txSignBuilder = await txBuilder.complete();

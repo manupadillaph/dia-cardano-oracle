@@ -2,10 +2,6 @@ import { input as promptInput } from "@inquirer/prompts";
 
 import { toBigInt } from "../core/chain-helpers.js";
 import {
-  makeReferenceHolderValidator,
-  scriptAddressFromValidator,
-} from "../core/contracts.js";
-import {
   deriveCompressedPublicKeyFromPrivateKey,
   normalizeEthereumAddressHex,
   normalizeHex,
@@ -92,7 +88,6 @@ function defaultProtocolConfigInput(
 export function createProtocolStateArtifact(args: {
   source: "seed" | "private-key";
   walletAddress: string;
-  referenceHolderAddress: string;
   configInput?: ProtocolInitConfigInput;
 }): ConfigStateArtifact {
   const walletDefaults = deriveConfiguredWalletDefaults({
@@ -136,7 +131,6 @@ export function createProtocolStateArtifact(args: {
       source: args.source,
       address: args.walletAddress,
     },
-    referenceHolderAddress: args.referenceHolderAddress,
     bootstrapRefs: {
       config: {
         txHash: "",
@@ -151,10 +145,12 @@ export function createProtocolStateArtifact(args: {
       configValidatorAddress: "",
       coordinatorHash: "",
       coordinatorRewardAddress: "",
-      paymentHookPolicyId: null,
-      paymentHookUnit: null,
-      paymentHookValidatorHash: null,
-      paymentHookValidatorAddress: null,
+      referenceHolderValidatorHash: "",
+      referenceHolderAddress: "",
+      paymentHookPolicyId: "",
+      paymentHookUnit: "",
+      paymentHookValidatorHash: "",
+      paymentHookValidatorAddress: "",
     },
     configState,
     paymentHookState: null,
@@ -293,9 +289,6 @@ export async function initializeProtocolState(args?: {
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const walletAddress = await lucid.wallet().address();
-  const referenceHolderAddress = scriptAddressFromValidator(
-    await makeReferenceHolderValidator(),
-  );
   const walletDefaults = deriveConfiguredWalletDefaults({
     source,
     address: walletAddress,
@@ -311,7 +304,6 @@ export async function initializeProtocolState(args?: {
   return createProtocolStateArtifact({
     source,
     walletAddress,
-    referenceHolderAddress,
     configInput,
   });
 }

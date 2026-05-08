@@ -4,7 +4,6 @@ import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
-  makeConfigStateValidator,
   spendingValidatorFromCompiledScript,
 } from "../core/contracts.js";
 import { normalizeEthereumAddressHex, normalizeHex } from "../core/dia-intent.js";
@@ -29,7 +28,6 @@ import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   buildConfigDatumCbor,
   findSingleUtxoAtUnit,
-  splitUnit,
   toBigInt,
   waitForWalletSettlement,
   waitForUnitUtxoReplacement,
@@ -120,13 +118,10 @@ export async function configUpdate(args: {
       reportProgress,
     );
 
-  const configAssetName = splitUnit(state.scripts.configUnit).assetName;
-  const configValidator = state.compiledScripts?.configValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.configValidator)
-    : await makeConfigStateValidator({
-        bootstrapOutRef: state.bootstrapRefs.config,
-        assetName: configAssetName,
-      });
+  if (!state.compiledScripts?.configValidator) {
+    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
 
   const nextConfigState = resolveNextConfigState(state, input);
   const configDatumCbor = buildConfigDatumCbor(nextConfigState);

@@ -227,10 +227,9 @@ function testProtocolStateInit(): void {
   const state = createProtocolStateArtifact({
     source: "seed",
     walletAddress: "addr_test1qpgpsm75w7l9u6au7shqzsaulrtxz2gp6xw9zhun70es6tt4t3wsjavx26kmh586erf8xxhqc2y7urq5az32sjv56nyqquxj3j",
-    referenceHolderAddress: "addr_test1referenceholder",
   });
 
-  assert.equal(state.referenceHolderAddress, "addr_test1referenceholder");
+  assert.equal(state.scripts.referenceHolderAddress, "");
   assert.equal(state.bootstrapRefs.config.txHash, "");
   assert.equal(state.referenceScripts?.global?.config.txHash, "");
   assert.equal(state.configState.validConfigSigners.length, 1);
@@ -286,7 +285,7 @@ function testClientStateInit(): void {
 
   assert.equal(client.receiver, undefined);
   assert.equal(client.referenceScripts?.client?.receiver.txHash, "");
-  assert.equal(client.scripts.pairPolicyId, null);
+  assert.equal(client.scripts.pairPolicyId, "");
   assert.equal(
     client.drafts?.receiverParameterize?.receiverAssetName,
     "4449415f52454345495645525f434c49454e545f41",
@@ -1142,7 +1141,6 @@ function sampleConfigArtifact(): ConfigStateArtifact {
       source: "seed",
       address: "addr_test1sample",
     },
-    referenceHolderAddress: "addr_test1referenceholder",
     bootstrapRefs: {
       config: {
         txHash: "config-bootstrap",
@@ -1162,6 +1160,7 @@ function sampleConfigArtifact(): ConfigStateArtifact {
       coordinatorValidator: "cc",
       paymentHookMintPolicy: "dd",
       paymentHookValidator: "ee",
+      referenceHolderValidator: "ff",
     },
     datum: {
       configCbor: "config-cbor",
@@ -1214,6 +1213,11 @@ function sampleClientArtifact(): ClientStateArtifact {
           txHash: "client-pair-ref",
           outputIndex: 1,
           scriptHash: "11".repeat(28),
+        },
+        pairMint: {
+          txHash: "client-pair-mint-ref",
+          outputIndex: 2,
+          scriptHash: "22".repeat(28),
         },
       },
     },
@@ -1294,6 +1298,8 @@ function sampleScripts(): ConfigStateArtifact["scripts"] {
     configValidatorAddress: "addr_test1config",
     coordinatorHash: "33".repeat(28),
     coordinatorRewardAddress: "stake_test1coordinator",
+    referenceHolderValidatorHash: "55".repeat(28),
+    referenceHolderAddress: "addr_test1referenceholder",
     paymentHookPolicyId: "44".repeat(28),
     paymentHookUnit: `${"44".repeat(28)}4449415f5041594d454e545f484f4f4b`,
     paymentHookValidatorHash: "44".repeat(28),

@@ -54,7 +54,9 @@ function printUsage(): void {
   npm run cli -- preview:receiver:top-up --amount-lovelace 5000000 --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:receiver:withdraw --amount-lovelace 2000000 [--recipient-address <addr>] --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:settle --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json [--build-only]
-  npm run cli -- preview:payment-hook:withdraw --amount-lovelace 2000000 --state ./state/preview/config-bootstrap.json [--build-only]`);
+  npm run cli -- preview:payment-hook:withdraw --amount-lovelace 2000000 --state ./state/preview/config-bootstrap.json [--build-only]
+  npm run cli -- preview:reclaim-reference-script --script <config|payment-hook> --state ./state/preview/config-bootstrap.json [--build-only]
+  npm run cli -- preview:reclaim-reference-script --script client --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]`);
 }
 
 function requireInputPath(): string {
@@ -164,18 +166,18 @@ async function run(): Promise<void> {
     }
 
     case "preview:reference-holder": {
-      const {
-        makeReferenceHolderValidator,
-        scriptAddressFromValidator,
-        scriptHashFromValidator,
-      } = await import("./core/contracts.js");
-      const validator = await makeReferenceHolderValidator();
+      const { readConfigState } = await import("./core/state.js");
+      const statePath = optionalFlagValue("--state") ?? "state/preview/config-bootstrap.json";
+      const state = await readConfigState(path.resolve(statePath));
+      if (!state.scripts.referenceHolderAddress || !state.scripts.referenceHolderValidatorHash) {
+        throw new Error("ReferenceHolder address not found. Run preview:config:parameterize first.");
+      }
       printJson({
         network: "Preview",
         validator: "reference_holder.reference_holder.spend",
-        address: scriptAddressFromValidator(validator),
-        scriptHash: scriptHashFromValidator(validator),
-        spendableByWallet: false,
+        address: state.scripts.referenceHolderAddress,
+        scriptHash: state.scripts.referenceHolderValidatorHash,
+        reclaimableByAdmin: true,
       });
       return;
     }
@@ -696,6 +698,36 @@ async function run(): Promise<void> {
       }
       printJson(result);
       return;
+    }
+
+    case "preview:reclaim-reference-script": {
+      const { reclaimProtocolReferenceScript, reclaimClientReferenceScript } = await import(
+        "./transactions/reclaim-reference-script.js"
+      );
+      getCliConfig();
+      const scriptArg = requireFlagValue("--script");
+      const buildOnly = hasBuildOnlyFlag();
+
+      if (scriptArg === "config" || scriptArg === "payment-hook") {
+        const statePath = requireFlagValue("--state");
+        const result = await reclaimProtocolReferenceScript({ script: scriptArg, statePath, buildOnly });
+        if (!buildOnly) await writeJsonOutput(statePath, result);
+        printJson(result);
+        return;
+      }
+
+      if (scriptArg === "client") {
+        const protocolStatePath = requireFlagValue("--protocol-state");
+        const statePath = requireFlagValue("--state");
+        const result = await reclaimClientReferenceScript({ script: scriptArg, protocolStatePath, statePath, buildOnly });
+        if (!buildOnly) await writeJsonOutput(statePath, result);
+        printJson(result);
+        return;
+      }
+
+      throw new Error(
+        `Unknown --script value: '${scriptArg}'. Valid values: config, payment-hook, client.`,
+      );
     }
 
     case undefined:

@@ -1,10 +1,6 @@
 import path from "node:path";
 
 import {
-  makeConfigStateValidator,
-  makeCoordinatorValidator,
-  makeReferenceHolderValidator,
-  scriptAddressFromValidator,
   scriptHashFromValidator,
   spendingValidatorFromCompiledScript,
   withdrawalValidatorFromCompiledScript,
@@ -23,7 +19,6 @@ import {
 } from "../core/output-logging.js";
 import {
   selectFundingUtxo,
-  splitUnit,
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 
@@ -33,6 +28,10 @@ export async function publishConfigReferenceScripts(args: {
 }): Promise<ConfigStateArtifact> {
   const state = await readConfigState(path.resolve(args.statePath ?? "state/preview/config-bootstrap.json"));
 
+  if (!state.scripts.referenceHolderAddress) {
+    throw new Error("Config reference-scripts publish requires config parameterization first (run preview:config:parameterize).");
+  }
+
   reportProgress("Connecting to Preview and selecting the configured wallet");
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
@@ -41,28 +40,15 @@ export async function publishConfigReferenceScripts(args: {
     wallet.address(),
     wallet.getUtxos(),
   ]);
-  const configAssetName = splitUnit(state.scripts.configUnit).assetName;
-  const [configValidator, coordinatorValidator] = await Promise.all([
-    state.compiledScripts?.configValidator
-      ? Promise.resolve(
-          spendingValidatorFromCompiledScript(state.compiledScripts.configValidator),
-        )
-      : makeConfigStateValidator({
-          bootstrapOutRef: state.bootstrapRefs.config,
-          assetName: configAssetName,
-        }),
-    state.compiledScripts?.coordinatorValidator
-      ? Promise.resolve(
-          withdrawalValidatorFromCompiledScript(
-            state.compiledScripts.coordinatorValidator,
-          ),
-        )
-      : makeCoordinatorValidator({
-          configPolicyId: state.scripts.configPolicyId,
-          configAssetName,
-        }),
-  ]);
-  const referenceAddress = scriptAddressFromValidator(await makeReferenceHolderValidator());
+  if (!state.compiledScripts?.configValidator) {
+    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
+  if (!state.compiledScripts?.coordinatorValidator) {
+    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
+  const referenceAddress = state.scripts.referenceHolderAddress;
   const coinsPerUtxoByte = lucid.config().protocolParameters?.coinsPerUtxoByte;
   if (!coinsPerUtxoByte) {
     throw new Error("Lucid protocol parameters did not expose coinsPerUtxoByte.");
@@ -134,7 +120,6 @@ export async function publishConfigReferenceScripts(args: {
       source,
       address: walletAddress,
     },
-    referenceHolderAddress: referenceAddress,
     referenceScripts: {
       ...state.referenceScripts,
       global: {

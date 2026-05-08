@@ -3,9 +3,6 @@ import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
-  makeConfigStateValidator,
-  makePaymentHookMintingPolicy,
-  makePaymentHookValidator,
   mintingPolicyFromCompiledScript,
   policyIdFromMintingPolicy,
   scriptAddressFromValidator,
@@ -121,25 +118,18 @@ export async function paymentHookBootstrap(args: {
           ),
         ];
 
-  const configValidator = state.compiledScripts?.configValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.configValidator)
-    : await makeConfigStateValidator({
-        bootstrapOutRef: configBootstrapOutRef,
-        assetName: configAssetName,
-      });
+  if (!state.compiledScripts?.configValidator) {
+    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
   const paymentHookAssetName = normalizeHex(
     resolvedInput.paymentHookAssetName,
     "paymentHookAssetName",
   );
-  const paymentHookMintPolicy = state.compiledScripts?.paymentHookMintPolicy
-    ? mintingPolicyFromCompiledScript(state.compiledScripts.paymentHookMintPolicy)
-    : await makePaymentHookMintingPolicy({
-        bootstrapOutRef: paymentHookBootstrapOutRef,
-        assetName: paymentHookAssetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-        coordinatorCredentialHash: state.scripts.coordinatorHash,
-      });
+  if (!state.compiledScripts?.paymentHookMintPolicy) {
+    throw new Error("paymentHookMintPolicy compiled script not found. Run preview:payment-hook:parameterize first.");
+  }
+  const paymentHookMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.paymentHookMintPolicy);
   const paymentHookPolicyId = policyIdFromMintingPolicy(paymentHookMintPolicy);
   if (
     state.scripts.paymentHookPolicyId &&
@@ -149,15 +139,10 @@ export async function paymentHookBootstrap(args: {
   }
   const paymentHookUnit = `${paymentHookPolicyId}${paymentHookAssetName}`;
 
-  const paymentHookValidator = state.compiledScripts?.paymentHookValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator)
-    : await makePaymentHookValidator({
-        bootstrapOutRef: paymentHookBootstrapOutRef,
-        assetName: paymentHookAssetName,
-        configPolicyId: state.scripts.configPolicyId,
-        configAssetName,
-        coordinatorCredentialHash: state.scripts.coordinatorHash,
-      });
+  if (!state.compiledScripts?.paymentHookValidator) {
+    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+  }
+  const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
   const paymentHookValidatorHash = scriptHashFromValidator(paymentHookValidator);
   const paymentHookValidatorAddress = scriptAddressFromValidator(paymentHookValidator);
 
@@ -274,7 +259,6 @@ export async function paymentHookBootstrap(args: {
       source,
       address: walletAddress,
     },
-    referenceHolderAddress: state.referenceHolderAddress,
     bootstrapRefs: {
       config: state.bootstrapRefs.config,
       paymentHook: paymentHookBootstrapOutRef,

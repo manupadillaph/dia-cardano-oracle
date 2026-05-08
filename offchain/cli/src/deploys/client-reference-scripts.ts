@@ -1,10 +1,6 @@
 import path from "node:path";
 
 import {
-  makePairStateMintingPolicy,
-  makePairStateValidator,
-  makeReferenceHolderValidator,
-  makeReceiverValidator,
   mintingPolicyFromCompiledScript,
   policyIdFromMintingPolicy,
   scriptAddressFromValidator,
@@ -15,7 +11,6 @@ import { makeConfiguredLucid, selectConfiguredWallet } from "../core/lucid.js";
 import {
   appendTransactionRecord,
   type ClientStateArtifact,
-  type ConfigStateArtifact,
   type ReceiverArtifact,
 } from "../core/state.js";
 import { reportTxSignBuilderMetrics } from "../core/tx-metrics.js";
@@ -28,7 +23,6 @@ import {
 import {
   buildReceiverDatumCbor,
   selectFundingUtxo,
-  splitUnit,
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 
@@ -49,6 +43,11 @@ export async function publishClientReferenceScripts(args: {
       "Client reference-script publish requires a protocol state artifact produced after payment-hook bootstrap.",
     );
   }
+  if (!protocol.scripts.referenceHolderAddress) {
+    throw new Error(
+      "Client reference-script publish requires config parameterization first (run preview:config:parameterize).",
+    );
+  }
 
   reportProgress("Connecting to Preview and selecting the configured wallet");
   const lucid = await makeConfiguredLucid();
@@ -59,37 +58,26 @@ export async function publishClientReferenceScripts(args: {
     wallet.getUtxos(),
   ]);
 
-  const referenceAddress = scriptAddressFromValidator(await makeReferenceHolderValidator());
-
-  const configAssetName = splitUnit(protocol.scripts.configUnit).assetName;
+  const referenceAddress = protocol.scripts.referenceHolderAddress;
   if (!state.receiver) {
     throw new Error(
       "Client reference-script publish requires a client artifact produced by preview:receiver:parameterize.",
     );
   }
   const latestWalletUtxos = walletUtxos;
-  const receiver = await resolveReceiverArtifact(state, protocol, configAssetName);
-  const [receiverValidator, pairValidator] = await Promise.all([
-    state.compiledScripts?.receiverValidator
-      ? Promise.resolve(
-          spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator),
-        )
-      : makeReceiverValidator({
-          bootstrapOutRef: receiver.bootstrapRef,
-          assetName: receiver.receiverAssetName,
-          configPolicyId: protocol.scripts.configPolicyId,
-          configAssetName,
-        }),
-    state.compiledScripts?.pairValidator
-      ? Promise.resolve(
-          spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator),
-        )
-      : makePairStateValidator({
-          configPolicyId: protocol.scripts.configPolicyId,
-          configAssetName,
-          receiverHash: receiver.receiverValidatorHash,
-        }),
-  ]);
+  const receiver = await resolveReceiverArtifact(state);
+  if (!state.compiledScripts?.receiverValidator) {
+    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
+  if (!state.compiledScripts?.pairValidator) {
+    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
+  if (!state.compiledScripts?.pairMintPolicy) {
+    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy);
 
   const coinsPerUtxoByte = lucid.config().protocolParameters?.coinsPerUtxoByte;
   if (!coinsPerUtxoByte) {
@@ -105,22 +93,28 @@ export async function publishClientReferenceScripts(args: {
     address: referenceAddress,
     scriptRef: pairValidator,
   });
+  const pairMintMinLovelace = computeMinUtxoForScriptOutput({
+    coinsPerUtxoByte,
+    address: referenceAddress,
+    scriptRef: pairMintPolicy,
+  });
   reportProgress(
-    `Computed min lovelace for reference-script outputs: receiverValidator=${receiverMinLovelace}, pairValidator=${pairMinLovelace}`,
+    `Computed min lovelace for reference-script outputs: receiverValidator=${receiverMinLovelace}, pairValidator=${pairMinLovelace}, pairMintPolicy=${pairMintMinLovelace}`,
   );
 
   reportProgress("Building Preview client reference-script publish transaction");
   const fundingUtxo = selectFundingUtxo(
     latestWalletUtxos,
     [receiver.bootstrapRef],
-    receiverMinLovelace + pairMinLovelace,
+    receiverMinLovelace + pairMinLovelace + pairMintMinLovelace,
     "client reference-script publish",
   );
   const txBuilder = lucid
     .newTx()
     .collectFrom([fundingUtxo])
     .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: receiverMinLovelace }, receiverValidator)
-    .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: pairMinLovelace }, pairValidator);
+    .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: pairMinLovelace }, pairValidator)
+    .pay.ToAddressWithData(referenceAddress, undefined, { lovelace: pairMintMinLovelace }, pairMintPolicy);
 
   const txSignBuilder = await txBuilder.complete();
   reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
@@ -180,6 +174,11 @@ export async function publishClientReferenceScripts(args: {
           outputIndex: 1,
           scriptHash: scriptHashFromValidator(pairValidator),
         },
+        pairMint: {
+          txHash: submittedTxHash ?? "",
+          outputIndex: 2,
+          scriptHash: policyIdFromMintingPolicy(pairMintPolicy),
+        },
       },
     },
     receiver: {
@@ -206,8 +205,6 @@ export async function publishClientReferenceScripts(args: {
 
 async function resolveReceiverArtifact(
   state: ClientStateArtifact,
-  protocol: ConfigStateArtifact,
-  configAssetName: string,
 ): Promise<
   ReceiverArtifact & {
     pairPolicyId: string;
@@ -222,26 +219,18 @@ async function resolveReceiverArtifact(
     );
   }
 
-  const pairValidator = state.compiledScripts?.pairValidator
-    ? spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator)
-    : await makePairStateValidator({
-        configPolicyId: protocol.scripts.configPolicyId,
-        configAssetName,
-        receiverHash: state.receiver.receiverValidatorHash,
-      });
+  if (!state.compiledScripts?.pairValidator) {
+    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+  }
+  const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
+  if (!state.compiledScripts?.pairMintPolicy) {
+    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+  }
   const pairPolicyId =
-    state.scripts.pairPolicyId ??
-    policyIdFromMintingPolicy(
-      state.compiledScripts?.pairMintPolicy
-        ? mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy)
-        : await makePairStateMintingPolicy({
-          configPolicyId: protocol.scripts.configPolicyId,
-            configAssetName,
-            receiverHash: state.receiver.receiverValidatorHash,
-          }),
-    );
+    state.scripts.pairPolicyId ||
+    policyIdFromMintingPolicy(mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy));
 
   return {
     ...state.receiver,

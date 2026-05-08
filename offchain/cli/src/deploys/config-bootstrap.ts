@@ -1,16 +1,12 @@
 import path from "node:path";
-import { Constr, type OutRef, type UTxO } from "@lucid-evolution/lucid";
+import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
 import {
-  makeConfigStateMintingPolicy,
-  makeConfigStateValidator,
-  makeCoordinatorValidator,
   mintingPolicyFromCompiledScript,
   policyIdFromMintingPolicy,
   scriptAddressFromValidator,
   spendingValidatorFromCompiledScript,
-  scriptCredentialState,
   scriptHashFromValidator,
   scriptRewardAddress,
   withdrawalValidatorFromCompiledScript,
@@ -104,41 +100,32 @@ export async function configBootstrap(args: {
     `Selected wallet bootstrap UTxO ${bootstrapOutRef.txHash}#${bootstrapOutRef.outputIndex}`,
   );
 
-  reportProgress("Deriving Config and global Coordinator scripts from the current blueprint");
+  reportProgress("Loading Config and Coordinator scripts from compiled state");
   const configAssetName = normalizeHex(
     resolvedInput.configAssetName,
     "configAssetName",
   );
-  const configMintPolicy =
-    previousState?.compiledScripts?.configMintPolicy
-      ? mintingPolicyFromCompiledScript(previousState.compiledScripts.configMintPolicy)
-      : await makeConfigStateMintingPolicy({
-          bootstrapOutRef,
-          assetName: configAssetName,
-        });
+  if (!previousState?.compiledScripts?.configMintPolicy) {
+    throw new Error("configMintPolicy compiled script not found. Run preview:config:parameterize first.");
+  }
+  const configMintPolicy = mintingPolicyFromCompiledScript(previousState.compiledScripts.configMintPolicy);
   const configPolicyId = policyIdFromMintingPolicy(configMintPolicy);
-  if (previousState?.scripts.configPolicyId && previousState.scripts.configPolicyId !== configPolicyId) {
+  if (previousState.scripts.configPolicyId && previousState.scripts.configPolicyId !== configPolicyId) {
     throw new Error("Config bootstrap input does not match the previously published Config reference script.");
   }
   const configUnit = `${configPolicyId}${configAssetName}`;
 
-  const configValidator =
-    previousState?.compiledScripts?.configValidator
-      ? spendingValidatorFromCompiledScript(previousState.compiledScripts.configValidator)
-      : await makeConfigStateValidator({
-          bootstrapOutRef,
-          assetName: configAssetName,
-        });
+  if (!previousState.compiledScripts.configValidator) {
+    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const configValidator = spendingValidatorFromCompiledScript(previousState.compiledScripts.configValidator);
   const configValidatorHash = scriptHashFromValidator(configValidator);
   const configValidatorAddress = scriptAddressFromValidator(configValidator);
 
-  const coordinatorValidator =
-    previousState?.compiledScripts?.coordinatorValidator
-      ? withdrawalValidatorFromCompiledScript(previousState.compiledScripts.coordinatorValidator)
-      : await makeCoordinatorValidator({
-          configPolicyId,
-          configAssetName,
-        });
+  if (!previousState.compiledScripts.coordinatorValidator) {
+    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+  }
+  const coordinatorValidator = withdrawalValidatorFromCompiledScript(previousState.compiledScripts.coordinatorValidator);
   const coordinatorHash = scriptHashFromValidator(coordinatorValidator);
   const coordinatorRewardAddress = scriptRewardAddress(coordinatorHash);
 
@@ -201,7 +188,6 @@ export async function configBootstrap(args: {
   reportTxSignBuilderMetrics(txSignBuilder, reportProgress);
   logEffectiveOutputs(txSignBuilder, reportProgress);
   const unsignedHash = txSignBuilder.toHash();
-  const unsignedCbor = txSignBuilder.toCBOR();
 
   let submittedTxHash: string | null = null;
   let confirmed = false;
@@ -251,7 +237,6 @@ export async function configBootstrap(args: {
       source,
       address: walletAddress,
     },
-    referenceHolderAddress: previousState?.referenceHolderAddress,
     bootstrapRefs: {
       config: bootstrapOutRef,
       paymentHook: previousState?.bootstrapRefs.paymentHook ?? null,
@@ -263,10 +248,12 @@ export async function configBootstrap(args: {
       configValidatorAddress,
       coordinatorHash,
       coordinatorRewardAddress,
-      paymentHookPolicyId: previousState?.scripts.paymentHookPolicyId ?? null,
-      paymentHookUnit: previousState?.scripts.paymentHookUnit ?? null,
-      paymentHookValidatorHash: previousState?.scripts.paymentHookValidatorHash ?? null,
-      paymentHookValidatorAddress: previousState?.scripts.paymentHookValidatorAddress ?? null,
+      referenceHolderValidatorHash: previousState?.scripts.referenceHolderValidatorHash ?? "",
+      referenceHolderAddress: previousState?.scripts.referenceHolderAddress ?? "",
+      paymentHookPolicyId: previousState?.scripts.paymentHookPolicyId ?? "",
+      paymentHookUnit: previousState?.scripts.paymentHookUnit ?? "",
+      paymentHookValidatorHash: previousState?.scripts.paymentHookValidatorHash ?? "",
+      paymentHookValidatorAddress: previousState?.scripts.paymentHookValidatorAddress ?? "",
     },
     configState: nextConfigState,
     paymentHookState: previousState?.paymentHookState ?? null,

@@ -50,16 +50,18 @@ export type ProtocolDeploymentScripts = {
   configValidatorAddress: string;
   coordinatorHash: string;
   coordinatorRewardAddress: string;
-  paymentHookPolicyId: string | null;
-  paymentHookUnit: string | null;
-  paymentHookValidatorHash: string | null;
-  paymentHookValidatorAddress: string | null;
+  referenceHolderValidatorHash: string;
+  referenceHolderAddress: string;
+  paymentHookPolicyId: string;
+  paymentHookUnit: string;
+  paymentHookValidatorHash: string;
+  paymentHookValidatorAddress: string;
 };
 
 export type ClientDeploymentScripts = {
-  pairPolicyId: string | null;
-  pairValidatorHash: string | null;
-  pairValidatorAddress: string | null;
+  pairPolicyId: string;
+  pairValidatorHash: string;
+  pairValidatorAddress: string;
 };
 
 export type ResolvedDeploymentScripts = ProtocolDeploymentScripts &
@@ -119,6 +121,7 @@ export type ReferenceScriptsState = {
   client?: {
     receiver: ReferenceScriptUtxo;
     pair: ReferenceScriptUtxo;
+    pairMint: ReferenceScriptUtxo;
   };
 };
 
@@ -128,6 +131,7 @@ export type ProtocolCompiledScripts = {
   coordinatorValidator: string;
   paymentHookMintPolicy: string;
   paymentHookValidator: string;
+  referenceHolderValidator: string;
 };
 
 export type ClientCompiledScripts = {
@@ -151,7 +155,6 @@ export type ConfigStateArtifact = {
     source: "seed" | "private-key";
     address: string;
   };
-  referenceHolderAddress?: string;
   bootstrapRefs: {
     config: {
       txHash: string;
@@ -195,6 +198,7 @@ export type ClientStateArtifact = {
     client?: {
       receiver: ReferenceScriptUtxo;
       pair: ReferenceScriptUtxo;
+      pairMint: ReferenceScriptUtxo;
     };
   };
   receiver?: ReceiverArtifact;
@@ -264,6 +268,7 @@ export function emptyProtocolCompiledScripts(): ProtocolCompiledScripts {
     coordinatorValidator: "",
     paymentHookMintPolicy: "",
     paymentHookValidator: "",
+    referenceHolderValidator: "",
   };
 }
 

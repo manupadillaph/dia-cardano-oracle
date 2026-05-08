@@ -90,8 +90,10 @@ Generated payload files:
 
 ```sh
 npm run cli -- blueprint:list
-npm run cli -- preview:reference-holder
+npm run cli -- preview:reference-holder --state ./state/preview/config-bootstrap.json
 ```
+
+`preview:reference-holder` requires a parameterized state artifact (run after `preview:config:parameterize`).
 
 ### 2. Inspect network
 
@@ -146,7 +148,6 @@ Creates `./state/preview/config-bootstrap.json` with:
 - Config defaults
 - Config asset label/name
 - PaymentHook defaults
-- reference holder address
 - empty compiled scripts
 - empty transaction history
 
@@ -156,7 +157,7 @@ npm run cli -- preview:protocol:init
 
 ### 7. Parameterize Config scripts
 
-Selects a pure ADA wallet UTxO and derives the Config and Coordinator scripts offline.
+Selects a pure ADA wallet UTxO and derives the Config, Coordinator, and ReferenceHolder scripts offline. Saves compiled scripts and the `referenceHolderAddress` to the artifact.
 
 ```sh
 npm run cli -- preview:config:parameterize \
@@ -248,7 +249,7 @@ npm run cli -- preview:receiver:bootstrap \
 
 ### 16. Publish client reference scripts
 
-Publishes the Receiver and Pair validators at `reference_holder`.
+Publishes the Receiver spend validator, Pair spend validator, and Pair minting policy at `reference_holder` in a single transaction (outputs 0, 1, 2 respectively).
 
 ```sh
 npm run cli -- preview:reference-scripts:publish-client \
@@ -415,6 +416,76 @@ npm run cli -- preview:payment-hook:withdraw \
   --state ./state/preview/config-bootstrap.json
 ```
 
+### 28. Reclaim reference-script UTxOs
+
+Spends reference-script UTxO(s) at the `reference_holder` address and returns the locked ADA to the admin wallet. Used when upgrading contracts: reclaim, then re-publish the new version.
+
+`--script` maps 1:1 to publish commands — if a publish command put N UTxOs on-chain, its reclaim name spends exactly those same N UTxOs in one transaction. Cleared entries are reset to `{ txHash: "", outputIndex: 0, scriptHash: "" }` in the artifact.
+
+Requires a Config signer wallet. Uses the live Config UTxO as a reference input.
+
+There are 6 reference-script UTxOs in total:
+
+| UTxO | What's stored there | Published by | Output index |
+| --- | --- | --- | --- |
+| `global.config` | `config_state` spend validator | `preview:config:reference-scripts` | 0 |
+| `global.coordinator` | `update_coordinator` withdrawal validator | `preview:config:reference-scripts` | 1 |
+| `global.paymentHook` | `payment_hook` spend validator | `preview:payment-hook:reference-script` | 0 |
+| `client.receiver` | `receiver` spend validator (per client) | `preview:reference-scripts:publish-client` | 0 |
+| `client.pair` | `pair_state` spend validator (per client) | `preview:reference-scripts:publish-client` | 1 |
+| `client.pairMint` | `pair_state` minting policy (per client) | `preview:reference-scripts:publish-client` | 2 |
+
+Minting policies (`config_state` mint, `payment_hook` mint, `receiver` mint) are one-shot bootstrap scripts — they are NOT stored at `reference_holder`.
+
+Reclaim `--script` values and what each reclaims in one transaction:
+
+| `--script` | UTxOs reclaimed |
+| --- | --- |
+| `config` | global.config + global.coordinator (2 UTxOs — same as publish) |
+| `payment-hook` | global.paymentHook (1 UTxO) |
+| `client` | client.receiver + client.pair + client.pairMint (3 UTxOs — same as publish) |
+
+**Global scripts:**
+
+```sh
+# Reclaims config + coordinator together (they were published in the same tx):
+npm run cli -- preview:reclaim-reference-script \
+  --script config \
+  --state ./state/preview/config-bootstrap.json
+
+# Reclaims payment-hook alone:
+npm run cli -- preview:reclaim-reference-script \
+  --script payment-hook \
+  --state ./state/preview/config-bootstrap.json
+```
+
+**Client scripts:**
+
+```sh
+# Reclaims receiver + pair + pairMint together (they were published in the same tx):
+npm run cli -- preview:reclaim-reference-script \
+  --script client \
+  --protocol-state ./state/preview/config-bootstrap.json \
+  --state ./state/preview/clients/client-a.json
+```
+
+After reclaiming, re-publish with the standard publish command:
+
+```sh
+# After reclaiming config (republishes config + coordinator in one tx):
+npm run cli -- preview:config:reference-scripts \
+  --state ./state/preview/config-bootstrap.json
+
+# After reclaiming payment-hook:
+npm run cli -- preview:payment-hook:reference-script \
+  --state ./state/preview/config-bootstrap.json
+
+# After reclaiming client (republishes receiver + pair + pairMint in one tx):
+npm run cli -- preview:reference-scripts:publish-client \
+  --protocol-state ./state/preview/config-bootstrap.json \
+  --state ./state/preview/clients/client-a.json
+```
+
 ## Build Only
 
 Every transaction-submitting command supports `--build-only`. In this mode the
@@ -461,7 +532,7 @@ Depending on the artifact level, they keep:
 
 - selected bootstrap UTxOs in `bootstrapRefs`
 - derived ids and addresses in `scripts`
-- serialized scripts in `compiledScripts`: protocol artifacts keep only Config/Coordinator/PaymentHook scripts, and client artifacts keep only Receiver/Pair scripts
+- serialized scripts in `compiledScripts`: protocol artifacts keep Config/Coordinator/ReferenceHolder/PaymentHook scripts, and client artifacts keep only Receiver/Pair scripts
 - current datum CBOR in `datum`
 - published reference script pointers in `referenceScripts`
 - transaction history in `transactions`
@@ -502,3 +573,4 @@ Transaction modules:
 - `src/transactions/receiver-withdraw.ts`
 - `src/transactions/settle.ts`
 - `src/transactions/payment-hook-withdraw.ts`
+- `src/transactions/reclaim-reference-script.ts`
