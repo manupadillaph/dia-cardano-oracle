@@ -32,7 +32,7 @@ function printUsage(): void {
   npm run cli -- preview:wallet:utxos
   npm run cli -- preview:wallet:defaults
   npm run cli -- preview:ethereum-wallet:create
-  npm run cli -- preview:protocol:init [--valid-config-signers <pkh[,pkh...]> --authorized-dia-public-keys <pubkey[,pubkey...]> --domain-name "DIA Oracle" --domain-version 1.0 --domain-source-chain-id 100640 --domain-verifying-contract 0xF8c614A483A0427A13512F52ac72A576678bE317 --protocol-fee-lovelace 2000000 --max-bootstrap-drift-seconds 300 --min-utxo-lovelace 5000000 --config-asset-label DIA_CONFIG --payment-hook-asset-label DIA_PAYMENT_HOOK --payment-hook-withdraw-address <addr>] [--out ./state/preview/config-bootstrap.json]
+  npm run cli -- preview:protocol:init [--valid-config-signers <pkh[,pkh...]> --authorized-dia-public-keys <pubkey[,pubkey...]> --domain-name "DIA Oracle" --domain-version 1.0 --domain-source-chain-id 100640 --domain-verifying-contract 0xF8c614A483A0427A13512F52ac72A576678bE317 --base-fee-lovelace 600000 --per-pair-fee-lovelace 400000 --max-bootstrap-drift-seconds 300 --min-utxo-lovelace 5000000 --config-asset-label DIA_CONFIG --payment-hook-asset-label DIA_PAYMENT_HOOK --payment-hook-withdraw-address <addr>] [--out ./state/preview/config-bootstrap.json]
   npm run cli -- preview:client:init [--state ./state/preview/config-bootstrap.json] [--client-id client-a --receiver-asset-label DIA_RECEIVER_CLIENT_A] [--out ./state/preview/clients/client-a.json]
   npm run cli -- preview:intent:create [--state ./state/preview/config-bootstrap.json] [--symbol USDC/USD] [--price 100045678] [--timestamp 1777274653] [--nonce 1777274633040] [--expiry 1777278253] [--out ./state/preview/intents/usdc-usd.unsigned.json]
   npm run cli -- preview:intent:sign [--input ./state/preview/intents/usdc-usd.unsigned.json] [--out ./state/preview/intents/usdc-usd.signed.json]
@@ -53,6 +53,8 @@ function printUsage(): void {
   npm run cli -- preview:update:batch --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json --manifest ./state/preview/update-batches/update-batch.manifest.json [--build-only] [--out ./state/preview/update-batches/update-batch.result.json]
   npm run cli -- preview:receiver:top-up --amount-lovelace 5000000 --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:receiver:withdraw --amount-lovelace 2000000 [--recipient-address <addr>] --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
+  npm run cli -- preview:receiver:update-min-utxo --new-min-utxo-lovelace 3000000 --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
+  npm run cli -- preview:pair:update-min-utxo --new-min-utxo-lovelace 3000000 --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json --state ./state/preview/clients/client-a/pairs/usdc-usd.json [--build-only]
   npm run cli -- preview:settle --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:payment-hook:withdraw --amount-lovelace 2000000 --state ./state/preview/config-bootstrap.json [--build-only]
   npm run cli -- preview:reclaim-reference-script --script <config|payment-hook> --state ./state/preview/config-bootstrap.json [--build-only]
@@ -240,7 +242,8 @@ async function run(): Promise<void> {
         hasFlag("--domain-version") ||
         hasFlag("--domain-source-chain-id") ||
         hasFlag("--domain-verifying-contract") ||
-        hasFlag("--protocol-fee-lovelace") ||
+        hasFlag("--base-fee-lovelace") ||
+        hasFlag("--per-pair-fee-lovelace") ||
         hasFlag("--max-bootstrap-drift-seconds") ||
         hasFlag("--min-utxo-lovelace") ||
         hasFlag("--config-asset-label") ||
@@ -257,7 +260,8 @@ async function run(): Promise<void> {
                 sourceChainId: requireFlagValue("--domain-source-chain-id"),
                 verifyingContract: requireFlagValue("--domain-verifying-contract"),
               },
-              protocolFeeLovelace: requireFlagValue("--protocol-fee-lovelace"),
+              baseFeeLovelace: requireFlagValue("--base-fee-lovelace"),
+              perPairFeeLovelace: requireFlagValue("--per-pair-fee-lovelace"),
               maxBootstrapDriftSeconds: requireFlagValue("--max-bootstrap-drift-seconds"),
               minUtxoLovelace: requireFlagValue("--min-utxo-lovelace"),
               configAssetLabel: requireFlagValue("--config-asset-label"),
@@ -636,6 +640,47 @@ async function run(): Promise<void> {
         recipientAddress: optionalFlagValue("--recipient-address"),
         statePath,
         protocolStatePath: requireFlagValue("--protocol-state"),
+        buildOnly,
+      });
+      if (statePath && !buildOnly) {
+        await writeJsonOutput(statePath, result);
+      }
+      printJson(result);
+      return;
+    }
+
+    case "preview:receiver:update-min-utxo": {
+      const { receiverUpdateMinUtxo } = await import(
+        "./transactions/receiver-update-min-utxo.js"
+      );
+      getCliConfig();
+      const statePath = optionalFlagValue("--state");
+      const buildOnly = hasBuildOnlyFlag();
+      const result = await receiverUpdateMinUtxo({
+        newMinUtxoLovelace: requireFlagValue("--new-min-utxo-lovelace"),
+        protocolStatePath: requireFlagValue("--protocol-state"),
+        clientStatePath: statePath ?? "",
+        buildOnly,
+      });
+      if (statePath && !buildOnly) {
+        await writeJsonOutput(statePath, result);
+      }
+      printJson(result);
+      return;
+    }
+
+    case "preview:pair:update-min-utxo": {
+      const { pairUpdateMinUtxo } = await import(
+        "./transactions/pair-update-min-utxo.js"
+      );
+      getCliConfig();
+      const statePath = optionalFlagValue("--state");
+      const buildOnly = hasBuildOnlyFlag();
+      const result = await pairUpdateMinUtxo({
+        newMinUtxoLovelace: requireFlagValue("--new-min-utxo-lovelace"),
+        protocolStatePath: requireFlagValue("--protocol-state"),
+        clientStatePath: requireFlagValue("--client-state"),
+        pairStatePath: statePath ?? "",
         buildOnly,
       });
       if (statePath && !buildOnly) {

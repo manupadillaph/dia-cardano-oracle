@@ -300,7 +300,8 @@ export function buildConfigDatumCbor(state: ConfigState): string {
         BigInt(state.domain.sourceChainId),
         normalizeHex(state.domain.verifyingContract, "domain.verifyingContract"),
       ]),
-      BigInt(state.protocolFeeLovelace),
+      BigInt(state.baseFeeLovelace),
+      BigInt(state.perPairFeeLovelace),
       state.paymentHookRef
         ? new Constr<PlutusData>(0, [
             new Constr<PlutusData>(0, [
@@ -376,7 +377,7 @@ export function decodePaymentHookDatum(
   };
 }
 
-export function buildPairDatumCbor(state: PairLiveState): string {
+export function buildPairDatumCbor(state: Omit<PairLiveState, "intent">): string {
   return Data.to(
     new Constr<PlutusData>(0, [
       state.pairId,
@@ -388,6 +389,22 @@ export function buildPairDatumCbor(state: PairLiveState): string {
       BigInt(state.minUtxoLovelace),
     ]),
   );
+}
+
+export function decodePairDatum(raw: string): Omit<PairLiveState, "intent"> {
+  const datum = Data.from(raw) as Constr<PlutusData>;
+  const [pairId, price, timestamp, nonce, intentHash, signer, minUtxoLovelace] =
+    datum.fields;
+
+  return {
+    pairId: normalizeHex(pairId as string, "pairId"),
+    price: BigInt(price as bigint).toString(),
+    timestamp: BigInt(timestamp as bigint).toString(),
+    nonce: BigInt(nonce as bigint).toString(),
+    intentHash: normalizeHex(intentHash as string, "intentHash"),
+    signer: normalizeHex(signer as string, "signer"),
+    minUtxoLovelace: BigInt(minUtxoLovelace as bigint).toString(),
+  };
 }
 
 function outRefKey(outRef: OutRefLike): string {

@@ -17,7 +17,8 @@ export type ConfigUpdateDraft = {
     sourceChainId: string;
     verifyingContract: string;
   };
-  protocolFeeLovelace: string;
+  baseFeeLovelace: string;
+  perPairFeeLovelace: string;
 };
 
 async function promptForText(args: {
@@ -66,9 +67,14 @@ export async function createConfigUpdateDraft(args: {
     message: "Domain verifyingContract",
     defaultValue: state.configState.domain.verifyingContract,
   });
-  const protocolFeeLovelace = await promptForText({
-    message: "Protocol fee lovelace",
-    defaultValue: state.configState.protocolFeeLovelace,
+  const baseFeeLovelace = await promptForText({
+    message: "Base protocol fee lovelace (constant component)",
+    defaultValue: state.configState.baseFeeLovelace,
+    validate: (value) => (/^\d+$/.test(value) ? true : "Enter a non-negative integer."),
+  });
+  const perPairFeeLovelace = await promptForText({
+    message: "Per-pair protocol fee lovelace (variable component per pair)",
+    defaultValue: state.configState.perPairFeeLovelace,
     validate: (value) => (/^\d+$/.test(value) ? true : "Enter a non-negative integer."),
   });
 
@@ -87,6 +93,7 @@ export async function createConfigUpdateDraft(args: {
         "domain.verifyingContract",
       ),
     },
-    protocolFeeLovelace: toBigInt(protocolFeeLovelace, "protocolFeeLovelace").toString(),
+    baseFeeLovelace: toBigInt(baseFeeLovelace, "baseFeeLovelace").toString(),
+    perPairFeeLovelace: toBigInt(perPairFeeLovelace, "perPairFeeLovelace").toString(),
   };
 }

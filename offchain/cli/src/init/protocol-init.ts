@@ -25,7 +25,8 @@ const DEFAULT_DOMAIN = {
   sourceChainId: "100640",
   verifyingContract: "0xF8c614A483A0427A13512F52ac72A576678bE317",
 };
-const DEFAULT_PROTOCOL_FEE_LOVELACE = "2000000";
+const DEFAULT_BASE_FEE_LOVELACE = "600000"; // 0.6 ADA base fee
+const DEFAULT_PER_PAIR_FEE_LOVELACE = "400000"; // 0.40 ADA per pair
 const DEFAULT_MAX_BOOTSTRAP_DRIFT_SECONDS = "300"; // 5 minutes
 const DEFAULT_MIN_UTXO_LOVELACE = "5000000";
 const DEFAULT_CONFIG_ASSET_LABEL = "DIA_CONFIG";
@@ -40,7 +41,10 @@ type ProtocolInitConfigInput = {
     sourceChainId: string;
     verifyingContract: string;
   };
-  protocolFeeLovelace: string;
+  /// Base protocol fee in lovelace (constant component of fee formula)
+  baseFeeLovelace: string;
+  /// Per-pair protocol fee in lovelace (variable component per pair)
+  perPairFeeLovelace: string;
   maxBootstrapDriftSeconds: string;
   minUtxoLovelace: string;
   configAssetLabel: string;
@@ -71,7 +75,8 @@ function defaultProtocolConfigInput(
         "domain.verifyingContract",
       ),
     },
-    protocolFeeLovelace: DEFAULT_PROTOCOL_FEE_LOVELACE,
+    baseFeeLovelace: DEFAULT_BASE_FEE_LOVELACE,
+    perPairFeeLovelace: DEFAULT_PER_PAIR_FEE_LOVELACE,
     maxBootstrapDriftSeconds: DEFAULT_MAX_BOOTSTRAP_DRIFT_SECONDS,
     minUtxoLovelace: DEFAULT_MIN_UTXO_LOVELACE,
     configAssetLabel: DEFAULT_CONFIG_ASSET_LABEL,
@@ -117,7 +122,8 @@ export function createProtocolStateArtifact(args: {
       sourceChainId: configInput.domain.sourceChainId,
       verifyingContract: configInput.domain.verifyingContract,
     },
-    protocolFeeLovelace: configInput.protocolFeeLovelace,
+    baseFeeLovelace: configInput.baseFeeLovelace,
+    perPairFeeLovelace: configInput.perPairFeeLovelace,
     maxBootstrapDriftSeconds: configInput.maxBootstrapDriftSeconds,
     paymentHookRef: null,
     updateCoordinatorCredential: null,
@@ -225,9 +231,14 @@ async function promptForProtocolConfigInput(
     message: "Domain verifyingContract",
     defaultValue: defaults.domain.verifyingContract,
   });
-  const protocolFeeLovelace = await promptForText({
-    message: "Protocol fee lovelace",
-    defaultValue: defaults.protocolFeeLovelace,
+  const baseFeeLovelace = await promptForText({
+    message: "Base protocol fee lovelace (constant component)",
+    defaultValue: defaults.baseFeeLovelace,
+    validate: (value) => (/^\d+$/.test(value) ? true : "Enter a non-negative integer."),
+  });
+  const perPairFeeLovelace = await promptForText({
+    message: "Per-pair protocol fee lovelace (variable component per pair)",
+    defaultValue: defaults.perPairFeeLovelace,
     validate: (value) => (/^\d+$/.test(value) ? true : "Enter a non-negative integer."),
   });
   const maxBootstrapDriftSeconds = await promptForText({
@@ -268,7 +279,8 @@ async function promptForProtocolConfigInput(
         "domain.verifyingContract",
       ),
     },
-    protocolFeeLovelace: toBigInt(protocolFeeLovelace, "protocolFeeLovelace").toString(),
+    baseFeeLovelace: toBigInt(baseFeeLovelace, "baseFeeLovelace").toString(),
+    perPairFeeLovelace: toBigInt(perPairFeeLovelace, "perPairFeeLovelace").toString(),
     maxBootstrapDriftSeconds: toBigInt(maxBootstrapDriftSeconds, "maxBootstrapDriftSeconds").toString(),
     minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
     configAssetLabel: configAssetLabel.trim(),

@@ -100,9 +100,13 @@ export async function parameterizeConfigScripts(args: {
         "domain.verifyingContract",
       ),
     },
-    protocolFeeLovelace: toBigInt(
-      resolvedInput.protocolFeeLovelace,
-      "protocolFeeLovelace",
+    baseFeeLovelace: toBigInt(
+      resolvedInput.baseFeeLovelace,
+      "baseFeeLovelace",
+    ).toString(),
+    perPairFeeLovelace: toBigInt(
+      resolvedInput.perPairFeeLovelace,
+      "perPairFeeLovelace",
     ).toString(),
     paymentHookRef: null,
     updateCoordinatorCredential: null,
@@ -174,7 +178,8 @@ function resolveConfigParameterizeInput(
     sourceChainId: number | string;
     verifyingContract: string;
   };
-  protocolFeeLovelace: string;
+  baseFeeLovelace: string;
+  perPairFeeLovelace: string;
   minUtxoLovelace: string;
 } {
   const configDefaults: ConfigParameterizeDefaults | undefined = state?.drafts?.configParameterize;
@@ -186,14 +191,16 @@ function resolveConfigParameterizeInput(
       : [walletDefaults.paymentKeyHash];
   const authorizedDiaPublicKeys = configState?.authorizedDiaPublicKeys ?? [];
   const domain = configState?.domain;
-  const protocolFeeLovelace = configState?.protocolFeeLovelace;
+  const baseFeeLovelace = configState?.baseFeeLovelace;
+  const perPairFeeLovelace = configState?.perPairFeeLovelace;
   const minUtxoLovelace = configState?.minUtxoLovelace;
 
   if (
     !configAssetName ||
     authorizedDiaPublicKeys.length === 0 ||
     !domain ||
-    !protocolFeeLovelace ||
+    !baseFeeLovelace ||
+    !perPairFeeLovelace ||
     !minUtxoLovelace
   ) {
     throw new Error(
@@ -206,7 +213,8 @@ function resolveConfigParameterizeInput(
     validConfigSigners,
     authorizedDiaPublicKeys,
     domain,
-    protocolFeeLovelace,
+    baseFeeLovelace,
+    perPairFeeLovelace,
     minUtxoLovelace,
   };
 }

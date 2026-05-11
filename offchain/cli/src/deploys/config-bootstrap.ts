@@ -49,7 +49,8 @@ type ResolvedConfigBootstrapInput = {
     sourceChainId: bigint;
     verifyingContract: string;
   };
-  protocolFeeLovelace: bigint;
+  baseFeeLovelace: bigint;
+  perPairFeeLovelace: bigint;
   maxBootstrapDriftSeconds: bigint;
   minUtxoLovelace: bigint;
 };
@@ -138,7 +139,8 @@ export async function configBootstrap(args: {
       sourceChainId: resolvedInput.domain.sourceChainId.toString(),
       verifyingContract: resolvedInput.domain.verifyingContract,
     },
-    protocolFeeLovelace: resolvedInput.protocolFeeLovelace.toString(),
+    baseFeeLovelace: resolvedInput.baseFeeLovelace.toString(),
+    perPairFeeLovelace: resolvedInput.perPairFeeLovelace.toString(),
     maxBootstrapDriftSeconds: resolvedInput.maxBootstrapDriftSeconds.toString(),
     paymentHookRef: null,
     updateCoordinatorCredential: null,
@@ -291,7 +293,8 @@ function resolveConfigBootstrapInput(
           normalizeHex(value, "authorizedDiaPublicKeys[]"),
         ) ?? [];
   const domain = state?.configState.domain;
-  const protocolFeeLovelace = state?.configState.protocolFeeLovelace;
+  const baseFeeLovelace = state?.configState.baseFeeLovelace;
+  const perPairFeeLovelace = state?.configState.perPairFeeLovelace;
   const maxBootstrapDriftSeconds = state?.configState.maxBootstrapDriftSeconds ?? "300"; // Default 5 minutes
   const minUtxoLovelace = state?.configState.minUtxoLovelace;
   const configAssetName =
@@ -302,7 +305,8 @@ function resolveConfigBootstrapInput(
     !configAssetName ||
     authorizedDiaPublicKeys.length === 0 ||
     !domain ||
-    !protocolFeeLovelace ||
+    !baseFeeLovelace ||
+    !perPairFeeLovelace ||
     !minUtxoLovelace
   ) {
     throw new Error(
@@ -323,7 +327,8 @@ function resolveConfigBootstrapInput(
         "domain.verifyingContract",
       ),
     },
-    protocolFeeLovelace: toBigInt(protocolFeeLovelace, "protocolFeeLovelace"),
+    baseFeeLovelace: toBigInt(baseFeeLovelace, "baseFeeLovelace"),
+    perPairFeeLovelace: toBigInt(perPairFeeLovelace, "perPairFeeLovelace"),
     maxBootstrapDriftSeconds: toBigInt(maxBootstrapDriftSeconds, "maxBootstrapDriftSeconds"),
     minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace"),
   };

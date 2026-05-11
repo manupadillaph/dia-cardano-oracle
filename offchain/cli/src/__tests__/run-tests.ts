@@ -4,6 +4,7 @@ import { Data } from "@lucid-evolution/plutus";
 import {
   ensureCompatibleBatch,
   resolvePairArtifact,
+  sortBatchUpdatesByPairTokenName,
 } from "../transactions/update-batch.js";
 import { createProtocolStateArtifact } from "../init/protocol-init.js";
 import { createClientStateArtifact } from "../init/client-init.js";
@@ -22,6 +23,7 @@ import {
   buildPairDatumCbor,
   buildPaymentHookDatumCbor,
   buildReceiverDatumCbor,
+  decodePairDatum,
   decodePaymentHookDatum,
   decodeReceiverDatum,
   addressToPlutusData,
@@ -70,6 +72,7 @@ testEthereumWalletCreate();
 testIntentSigning();
 testBatchSnapshotRefresh();
 testCompatibleBatchRules();
+testBatchUpdatesSortByPairTokenName();
 testProtocolStateInit();
 testClientStateInit();
 
@@ -177,7 +180,8 @@ function testBatchSnapshotRefresh(): void {
   };
   client.datum.receiverCbor = "client-receiver-cbor";
 
-  protocol.configState.protocolFeeLovelace = "2500000";
+  protocol.configState.baseFeeLovelace = "600000";
+  protocol.configState.perPairFeeLovelace = "400000";
   protocol.paymentHookState = {
     ...samplePaymentHookState(),
     accruedFeesLovelace: "9000000",
@@ -187,7 +191,8 @@ function testBatchSnapshotRefresh(): void {
 
   const refreshed = resolvePairArtifact(pair, client, protocol);
 
-  assert.equal(refreshed.configState.protocolFeeLovelace, "2500000");
+  assert.equal(refreshed.configState.baseFeeLovelace, "600000");
+  assert.equal(refreshed.configState.perPairFeeLovelace, "400000");
   assert.equal(refreshed.paymentHookState.accruedFeesLovelace, "9000000");
   assert.equal(refreshed.receiver?.receiverState.balanceLovelace, "33000000");
   assert.equal(refreshed.datum.configCbor, "protocol-config-cbor");
@@ -223,6 +228,19 @@ function testCompatibleBatchRules(): void {
   );
 }
 
+function testBatchUpdatesSortByPairTokenName(): void {
+  const updates = [
+    { artifact: samplePairArtifact("cc"), label: "cc" },
+    { artifact: samplePairArtifact("aa"), label: "aa" },
+    { artifact: samplePairArtifact("bb"), label: "bb" },
+  ];
+
+  const sorted = sortBatchUpdatesByPairTokenName(updates);
+
+  assert.deepEqual(sorted.map((update) => update.label), ["aa", "bb", "cc"]);
+  assert.deepEqual(updates.map((update) => update.label), ["cc", "aa", "bb"]);
+}
+
 function testProtocolStateInit(): void {
   const state = createProtocolStateArtifact({
     source: "seed",
@@ -238,7 +256,8 @@ function testProtocolStateInit(): void {
     : "03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807";
   assert.equal(state.configState.authorizedDiaPublicKeys[0], expectedAuthorizedDiaPublicKey);
   assert.equal(state.configState.domain.name, "DIA Oracle");
-  assert.equal(state.configState.protocolFeeLovelace, "2000000");
+  assert.equal(state.configState.baseFeeLovelace, "600000");
+  assert.equal(state.configState.perPairFeeLovelace, "400000");
   assert.equal(state.datum.configCbor, "");
   assert.equal(state.datum.paymentHookCbor, "");
   assert.equal(
@@ -335,7 +354,8 @@ function sampleConfigStateDatum() {
       sourceChainId: "100640",
       verifyingContract: "f8c614a483a0427a13512f52ac72a576678be317",
     },
-    protocolFeeLovelace: "2000000",
+    baseFeeLovelace: "600000",
+    perPairFeeLovelace: "400000",
     paymentHookRef: {
       policyId: "44".repeat(28),
       assetName: "4449415f5041594d454e545f484f4f4b",
@@ -478,7 +498,7 @@ function testConfigDatumRoundTrip(): void {
   const datum = Data.from(cbor) as Constr<PlutusData>;
 
   assert.equal(datum.index, 0);
-  assert.equal(datum.fields.length, 8, "ConfigDatum must have exactly 8 fields");
+  assert.equal(datum.fields.length, 9, "ConfigDatum must have exactly 9 fields");
 
   // 0: validConfigSigners (List<bytes>)
   const signers = datum.fields[0] as string[];
@@ -497,29 +517,32 @@ function testConfigDatumRoundTrip(): void {
   assert.equal(domain.fields[2], BigInt(state.domain.sourceChainId));
   assert.equal(domain.fields[3], state.domain.verifyingContract);
 
-  // 3: protocol_fee_lovelace (Int)
-  assert.equal(datum.fields[3], BigInt(state.protocolFeeLovelace));
+  // 3: base_fee_lovelace (Int)
+  assert.equal(datum.fields[3], BigInt(state.baseFeeLovelace));
 
-  // 4: payment_hook_ref (Option<PaymentHookRef>) -> Some
-  const hookRef = datum.fields[4] as Constr<PlutusData>;
+  // 4: per_pair_fee_lovelace (Int)
+  assert.equal(datum.fields[4], BigInt(state.perPairFeeLovelace));
+
+  // 5: payment_hook_ref (Option<PaymentHookRef>) -> Some
+  const hookRef = datum.fields[5] as Constr<PlutusData>;
   assert.equal(hookRef.index, 0, "payment_hook_ref must be Some(...)");
   const hookInner = hookRef.fields[0] as Constr<PlutusData>;
   assert.equal(hookInner.index, 0);
   assert.equal(hookInner.fields[0], state.paymentHookRef.policyId);
   assert.equal(hookInner.fields[1], state.paymentHookRef.assetName);
 
-  // 5: update_coordinator_credential (Option<Credential>) -> Some(Script)
-  const coord = datum.fields[5] as Constr<PlutusData>;
+  // 6: update_coordinator_credential (Option<Credential>) -> Some(Script)
+  const coord = datum.fields[6] as Constr<PlutusData>;
   assert.equal(coord.index, 0, "coordinator credential must be Some(...)");
   const coordCred = coord.fields[0] as Constr<PlutusData>;
   assert.equal(coordCred.index, 1, "Script credential constructor is index 1");
   assert.equal(coordCred.fields[0], state.updateCoordinatorCredential.hash);
 
-  // 6: max_bootstrap_drift_seconds (Int)
-  assert.equal(datum.fields[6], BigInt(state.maxBootstrapDriftSeconds));
+  // 7: max_bootstrap_drift_seconds (Int)
+  assert.equal(datum.fields[7], BigInt(state.maxBootstrapDriftSeconds));
 
-  // 7: min_utxo_lovelace (Int)
-  assert.equal(datum.fields[7], BigInt(state.minUtxoLovelace));
+  // 8: min_utxo_lovelace (Int)
+  assert.equal(datum.fields[8], BigInt(state.minUtxoLovelace));
 }
 
 function testConfigDatumFieldOrderAndArity(): void {
@@ -534,20 +557,21 @@ function testConfigDatumFieldOrderAndArity(): void {
   const cbor = buildConfigDatumCbor(stateWithNone);
   const datum = Data.from(cbor) as Constr<PlutusData>;
 
-  assert.equal(datum.fields.length, 8, "Arity must be 8 even when options are None");
+  assert.equal(datum.fields.length, 9, "Arity must be 9 even when options are None");
 
-  const hookRef = datum.fields[4] as Constr<PlutusData>;
+  const hookRef = datum.fields[5] as Constr<PlutusData>;
   assert.equal(hookRef.index, 1, "None constructor for payment_hook_ref");
   assert.equal(hookRef.fields.length, 0);
 
-  const coord = datum.fields[5] as Constr<PlutusData>;
+  const coord = datum.fields[6] as Constr<PlutusData>;
   assert.equal(coord.index, 1, "None constructor for update_coordinator_credential");
   assert.equal(coord.fields.length, 0);
 
   // Ints must be at the right positions.
-  assert.equal(typeof datum.fields[3], "bigint", "protocol_fee_lovelace at index 3");
-  assert.equal(typeof datum.fields[6], "bigint", "max_bootstrap_drift_seconds at index 6");
-  assert.equal(typeof datum.fields[7], "bigint", "min_utxo_lovelace at index 7");
+  assert.equal(typeof datum.fields[3], "bigint", "base_fee_lovelace at index 3");
+  assert.equal(typeof datum.fields[4], "bigint", "per_pair_fee_lovelace at index 4");
+  assert.equal(typeof datum.fields[7], "bigint", "max_bootstrap_drift_seconds at index 7");
+  assert.equal(typeof datum.fields[8], "bigint", "min_utxo_lovelace at index 8");
 }
 
 function testPairDatumRoundTrip(): void {
@@ -564,6 +588,15 @@ function testPairDatumRoundTrip(): void {
   assert.equal(datum.fields[4], state.intentHash);
   assert.equal(datum.fields[5], state.signer);
   assert.equal(datum.fields[6], BigInt(state.minUtxoLovelace));
+  assert.deepEqual(decodePairDatum(cbor), {
+    pairId: state.pairId,
+    price: state.price,
+    timestamp: state.timestamp,
+    nonce: state.nonce,
+    intentHash: state.intentHash,
+    signer: state.signer,
+    minUtxoLovelace: state.minUtxoLovelace,
+  });
 }
 
 function testAddressToPlutusDataKeyAndStake(): void {
@@ -1319,7 +1352,8 @@ function sampleConfigState(): ConfigStateArtifact["configState"] {
       sourceChainId: "100640",
       verifyingContract: "f8c614a483a0427a13512f52ac72a576678be317",
     },
-    protocolFeeLovelace: "2000000",
+    baseFeeLovelace: "600000",
+    perPairFeeLovelace: "400000",
     paymentHookRef: {
       policyId: "44".repeat(28),
       assetName: "4449415f5041594d454e545f484f4f4b",

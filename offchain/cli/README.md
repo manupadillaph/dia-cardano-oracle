@@ -365,10 +365,10 @@ for each pair update entry.
 
 `preview:update:batch` can update existing pairs and create missing pairs in the same transaction. New pairs inherit `minUtxoLovelace` from `configState.minUtxoLovelace` automatically.
 
-Batch updates accrue fees locally on the Receiver
-(`balance_lovelace -= K * protocol_fee_lovelace`,
-`accrued_to_hook_lovelace += K * protocol_fee_lovelace`). The
-PaymentHook is **not** touched during updates. The accrued lovelace is
+Batch updates accrue fees locally on the Receiver using the formula
+`total_fee = base_fee + (K * per_pair_fee)` where K is the number of pairs
+(`balance_lovelace -= total_fee`, `accrued_to_hook_lovelace += total_fee`).
+The PaymentHook is **not** touched during updates. The accrued lovelace is
 drained from one or more Receivers into the global PaymentHook in a
 separate admin-initiated transaction submitted with `preview:settle`.
 See `docs/architecture/cardano-oracle-architecture.md` §5.11 and §7.4.11
@@ -416,7 +416,58 @@ npm run cli -- preview:payment-hook:withdraw \
   --state ./state/preview/config-bootstrap.json
 ```
 
-### 28. Reclaim reference-script UTxOs
+### 28. Update min UTxO for Receiver (admin only)
+
+Updates the `min_utxo_lovelace` field on a Receiver UTxO using the dedicated `UpdateMinUtxo` redeemer. Requires the wallet to be a Config signer.
+
+```sh
+npm run cli -- preview:receiver:update-min-utxo \
+  --new-min-utxo-lovelace 3000000 \
+  --protocol-state ./state/preview/config-bootstrap.json \
+  --state ./state/preview/clients/client-a.json
+```
+
+The Receiver UTxO must be adjusted to hold the new minimum ADA. The `balance_lovelace` and `accrued_to_hook_lovelace` fields remain unchanged.
+
+### 29. Update min UTxO for Pair (admin only)
+
+Updates the `min_utxo_lovelace` field on a Pair UTxO using the dedicated `UpdateMinUtxo` redeemer. Requires the wallet to be a Config signer.
+
+```sh
+npm run cli -- preview:pair:update-min-utxo \
+  --new-min-utxo-lovelace 3000000 \
+  --protocol-state ./state/preview/config-bootstrap.json \
+  --client-state ./state/preview/clients/client-a.json \
+  --state ./state/preview/clients/client-a/pairs/usdc-usd.json
+```
+
+All Pair datum fields except `min_utxo_lovelace` remain unchanged.
+
+### 30. Update min UTxO for Config (admin only)
+
+Updates the `min_utxo_lovelace` field on the global Config UTxO. Unlike Receiver and Pair, Config does **not** have a dedicated `UpdateMinUtxo` redeemer—changes are made through the general `AdminUpdate` redeemer, which permits modifying all Config fields including `min_utxo_lovelace`. Requires the wallet to be a Config signer.
+
+```sh
+npm run cli -- preview:config:update \
+  --input ./state/preview/config-updates/min-utxo-update.json \
+  --state ./state/preview/config-bootstrap.json
+```
+
+The Config UTxO must be adjusted to hold the new minimum ADA. All other datum fields can also be updated in the same transaction via the update JSON.
+
+### 31. Update min UTxO for PaymentHook (admin only)
+
+Updates the `min_utxo_lovelace` field on the global PaymentHook UTxO. Like Config, PaymentHook does **not** have a dedicated `UpdateMinUtxo` redeemer—changes are made through the general `AdminUpdate` redeemer. The PaymentHook's `admin_update_transition` only freezes economic fields (`accrued_fees_lovelace`, `lifetime_collected_lovelace`, `lifetime_withdrawn_lovelace`), leaving `min_utxo_lovelace` and `withdraw_address` mutable. Requires the wallet to be a Config signer.
+
+```sh
+npm run cli -- preview:payment-hook:update \
+  --input ./state/preview/hook-updates/min-utxo-update.json \
+  --state ./state/preview/config-bootstrap.json
+```
+
+The PaymentHook UTxO must be adjusted to hold `new_min_utxo + accrued_fees_lovelace` total lovelace.
+
+### 32. Reclaim reference-script UTxOs
 
 Spends reference-script UTxO(s) at the `reference_holder` address and returns the locked ADA to the admin wallet. Used when upgrading contracts: reclaim, then re-publish the new version.
 

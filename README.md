@@ -57,8 +57,9 @@ Use [`offchain/cli/README.md`](offchain/cli/README.md) for the step-by-step Prev
 - client onboarding (per-client Receiver and Pair scripts)
 - pair create/update through signed oracle intents
 - single and batch updates, including first-time pair creation
-- decoupled fee settlement: every update accrues the protocol fee on the
-  Receiver datum; an admin-initiated Settle transaction periodically
+- decoupled fee settlement with formula `base + n × per_pair`: every update
+  accrues the protocol fee on the Receiver datum (base fee + per-pair fee for
+  each pair in the batch); an admin-initiated Settle transaction periodically
   drains the accrued fees from one or more Receivers into the global
   PaymentHook in a single batched transaction
 - admin and withdrawal transactions

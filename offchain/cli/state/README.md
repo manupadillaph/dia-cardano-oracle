@@ -121,8 +121,9 @@ Invariant (must match the on-chain check `exact_locked_lovelace`):
 ReceiverUTxO.lovelace == minUtxoLovelace + balanceLovelace + accruedToHookLovelace
 ```
 
-`accruedToHookLovelace` is increased by every `AccrueFee` redeemer (one
-per oracle update, or `N × protocol_fee_lovelace` for a batch update)
-and is drained back to `0` by every `Settle` redeemer. The `Withdraw`
-redeemer cannot touch this field — it only moves lovelace out of
-`balanceLovelace`.
+`accruedToHookLovelace` is increased by every `AccrueFee` redeemer using
+the configured fee formula `baseFeeLovelace + N × perPairFeeLovelace`,
+where `N = 1` for a single update and `N` is the batch size for batch
+updates. It is drained back to `0` by every `Settle` redeemer. The
+`Withdraw` redeemer cannot touch this field — it only moves lovelace out
+of `balanceLovelace`.

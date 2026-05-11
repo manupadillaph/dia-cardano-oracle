@@ -279,7 +279,8 @@ export async function submitBatchOracleUpdate(args: {
 
   const networkNow = await getNetworkNow(lucid);
 
-  const preparedUpdates = states.map(({ entry, artifact, intent: loadedIntent, isCreate }) => {
+  const preparedUpdates = sortBatchUpdatesByPairTokenName(
+    states.map(({ entry, artifact, intent: loadedIntent, isCreate }) => {
     const intent = normalizeDiaOracleIntent(loadedIntent);
     const witness = recoverDiaOracleIntentWitness(domain, intent);
 
@@ -326,11 +327,12 @@ export async function submitBatchOracleUpdate(args: {
       nextPairState,
       isCreate,
     };
-  });
+  }),
+  );
 
   const totalFee =
-    BigInt(state.configState.protocolFeeLovelace) *
-    BigInt(preparedUpdates.length);
+    BigInt(state.configState.baseFeeLovelace) +
+    BigInt(state.configState.perPairFeeLovelace) * BigInt(preparedUpdates.length);
   const nextReceiverState = {
     ...currentReceiverState,
     balanceLovelace: (
@@ -672,6 +674,14 @@ export function resolvePairArtifact(
       receiverCbor: clientState.datum.receiverCbor,
     },
   };
+}
+
+export function sortBatchUpdatesByPairTokenName<
+  T extends { artifact: { pair: { tokenName: string } } },
+>(updates: T[]): T[] {
+  return [...updates].sort((left, right) =>
+    left.artifact.pair.tokenName.localeCompare(right.artifact.pair.tokenName),
+  );
 }
 
 export function ensureCompatibleBatch(states: ResolvedPairStateArtifact[]): void {

@@ -310,15 +310,16 @@ export async function submitOracleUpdate(args: {
     signer: intent.signer,
     intent: diaIntentToState(intent),
   };
+  const protocolFee =
+    BigInt(state.configState.baseFeeLovelace) +
+    BigInt(state.configState.perPairFeeLovelace);
   const nextReceiverState = {
     ...currentReceiverState,
     balanceLovelace: (
-      BigInt(currentReceiverState.balanceLovelace) -
-      BigInt(state.configState.protocolFeeLovelace)
+      BigInt(currentReceiverState.balanceLovelace) - protocolFee
     ).toString(),
     accruedToHookLovelace: (
-      BigInt(currentReceiverState.accruedToHookLovelace) +
-      BigInt(state.configState.protocolFeeLovelace)
+      BigInt(currentReceiverState.accruedToHookLovelace) + protocolFee
     ).toString(),
   };
   if (BigInt(nextReceiverState.balanceLovelace) < 0n) {

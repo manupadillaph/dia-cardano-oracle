@@ -28,7 +28,12 @@ export type ConfigState = {
     sourceChainId: string;
     verifyingContract: string;
   };
-  protocolFeeLovelace: string;
+  /// Base protocol fee in lovelace (constant component of fee formula)
+  /// Formula: protocol_fee(N) = baseFeeLovelace + (N * perPairFeeLovelace)
+  baseFeeLovelace: string;
+  /// Per-pair protocol fee in lovelace (variable component per pair)
+  /// Formula: protocol_fee(N) = baseFeeLovelace + (N * perPairFeeLovelace)
+  perPairFeeLovelace: string;
   maxBootstrapDriftSeconds: string;  // Intent freshness window for bootstrap validation
   paymentHookRef: PaymentHookRefState | null;
   updateCoordinatorCredential: CoordinatorCredentialState | null;

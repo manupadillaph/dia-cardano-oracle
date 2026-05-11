@@ -49,7 +49,8 @@ type ConfigUpdateInput = {
     sourceChainId?: string | number;
     verifyingContract?: string;
   };
-  protocolFeeLovelace?: string;
+  baseFeeLovelace?: string;
+  perPairFeeLovelace?: string;
   maxBootstrapDriftSeconds?: string;
   paymentHookRef?: {
     policyId: string;
@@ -273,10 +274,14 @@ function resolveNextConfigState(
               "domain.verifyingContract",
             ),
     },
-    protocolFeeLovelace:
-      input.protocolFeeLovelace === undefined
-        ? state.configState.protocolFeeLovelace
-        : toBigInt(input.protocolFeeLovelace, "protocolFeeLovelace").toString(),
+    baseFeeLovelace:
+      input.baseFeeLovelace === undefined
+        ? state.configState.baseFeeLovelace
+        : toBigInt(input.baseFeeLovelace, "baseFeeLovelace").toString(),
+    perPairFeeLovelace:
+      input.perPairFeeLovelace === undefined
+        ? state.configState.perPairFeeLovelace
+        : toBigInt(input.perPairFeeLovelace, "perPairFeeLovelace").toString(),
     maxBootstrapDriftSeconds:
       input.maxBootstrapDriftSeconds === undefined
         ? state.configState.maxBootstrapDriftSeconds
