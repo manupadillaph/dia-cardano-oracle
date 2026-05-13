@@ -81,7 +81,7 @@ pub fn valid_pair_state(datum: PairDatum) -> Bool {
     datum.nonce >= 0,
     bytearray.length(datum.intent_hash) == 32,
     bytearray.length(datum.signer) == 20,
-    datum.min_utxo_lovelace >= 0,
+    datum.min_utxo_lovelace > 0,
   }
 }
 
@@ -365,6 +365,10 @@ test real_dia_signature_is_accepted() {
 
 test negative_price_pair_state_is_rejected() {
   !valid_pair_state(PairDatum { ..sample_pair_datum(), price: -1 })
+}
+
+test zero_min_utxo_pair_state_is_rejected() {
+  !valid_pair_state(PairDatum { ..sample_pair_datum(), min_utxo_lovelace: 0 })
 }
 
 test negative_price_intent_signature_is_rejected() {

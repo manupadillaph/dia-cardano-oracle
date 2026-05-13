@@ -24,7 +24,7 @@ pub fn valid_payment_hook_state(datum: PaymentHookDatum) -> Bool {
     datum.accrued_fees_lovelace >= 0,
     datum.lifetime_collected_lovelace >= 0,
     datum.lifetime_withdrawn_lovelace >= 0,
-    datum.min_utxo_lovelace >= 0,
+    datum.min_utxo_lovelace > 0,
   }
 }
 
@@ -96,7 +96,7 @@ pub fn withdraw_paid_to_target(
   total_paid >= amount
 }
 
-test valid_payment_hook_state_accepts_non_negative_values() {
+test valid_payment_hook_state_accepts_positive_min_utxo_and_non_negative_counters() {
   valid_payment_hook_state(sample_payment_hook())
 }
 
@@ -236,6 +236,12 @@ test valid_payment_hook_state_rejects_negative_lifetime_withdrawn() {
 test valid_payment_hook_state_rejects_negative_min_utxo() {
   !valid_payment_hook_state(
     PaymentHookDatum { ..sample_payment_hook(), min_utxo_lovelace: -1 },
+  )
+}
+
+test valid_payment_hook_state_rejects_zero_min_utxo() {
+  !valid_payment_hook_state(
+    PaymentHookDatum { ..sample_payment_hook(), min_utxo_lovelace: 0 },
   )
 }
 

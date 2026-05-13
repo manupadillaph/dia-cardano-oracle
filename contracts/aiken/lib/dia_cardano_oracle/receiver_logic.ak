@@ -25,7 +25,7 @@ pub fn valid_receiver_state(datum: ReceiverDatum) -> Bool {
   and {
     datum.balance_lovelace >= 0,
     datum.accrued_to_hook_lovelace >= 0,
-    datum.min_utxo_lovelace >= 0,
+    datum.min_utxo_lovelace > 0,
   }
 }
 
@@ -166,7 +166,7 @@ fn sample_output_for(datum: ReceiverDatum) -> Output {
   }
 }
 
-test valid_receiver_state_accepts_non_negative_values() {
+test valid_receiver_state_accepts_positive_min_utxo_and_non_negative_balances() {
   valid_receiver_state(sample_receiver())
 }
 
@@ -185,6 +185,12 @@ test valid_receiver_state_rejects_negative_accrued() {
 test valid_receiver_state_rejects_negative_min_utxo() {
   !valid_receiver_state(
     ReceiverDatum { ..sample_receiver(), min_utxo_lovelace: -1 },
+  )
+}
+
+test valid_receiver_state_rejects_zero_min_utxo() {
+  !valid_receiver_state(
+    ReceiverDatum { ..sample_receiver(), min_utxo_lovelace: 0 },
   )
 }
 

@@ -82,7 +82,7 @@ pub fn valid_config_state(datum: ConfigDatum) -> Bool {
     ),
     unique_authorized_dia_public_keys(datum.authorized_dia_public_keys),
     datum.max_bootstrap_drift_seconds >= 0,
-    datum.min_utxo_lovelace >= 0,
+    datum.min_utxo_lovelace > 0,
   }
 }
 
@@ -261,4 +261,8 @@ test admin_update_transition_accepts_min_utxo_change() {
     sample_config(),
     ConfigDatum { ..sample_config(), min_utxo_lovelace: 5_000_000 },
   )
+}
+
+test valid_config_state_rejects_zero_min_utxo() {
+  !valid_config_state(ConfigDatum { ..sample_config(), min_utxo_lovelace: 0 })
 }

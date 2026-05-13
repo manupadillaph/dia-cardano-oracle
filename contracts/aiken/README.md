@@ -51,15 +51,16 @@ Four datums contain `min_utxo_lovelace`. Two use a **dedicated `UpdateMinUtxo` r
 and two use the **general `AdminUpdate` redeemer** (which permits `min_utxo_lovelace` changes
 because the transition logic does not freeze this field):
 
-| Datum | Redeemer for min_uta update | Notes |
+| Datum | Redeemer for min UTxO update | Notes |
 |-------|---------------------------|-------|
 | `ReceiverDatum` | `UpdateMinUtxo` (dedicated) | Only `min_utxo` changes; `balance_lovelace`, `accrued_to_hook_lovelace` frozen |
 | `PairDatum` | `UpdateMinUtxo` (dedicated) | Only `min_utxo` changes; all price/intent fields frozen |
 | `ConfigDatum` | `AdminUpdate` (general) | No dedicated redeemer; `min_utxo` mutable via general update |
 | `PaymentHookDatum` | `AdminUpdate` (general) | No dedicated redeemer; `min_utxo` and `withdraw_address` mutable; economic fields frozen |
 
-**Common validation:** All four require `has_config_signer` authorization and enforce
-`exact_locked_lovelace` (output ADA must match the new datum minimums).
+**Common validation:** All four require `has_config_signer` authorization, require a
+positive `min_utxo_lovelace`, and enforce `exact_locked_lovelace` (output ADA must
+match the new datum minimums).
 
 ## Structure
 
