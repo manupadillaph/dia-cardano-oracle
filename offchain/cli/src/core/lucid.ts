@@ -1,5 +1,6 @@
 import { Lucid } from "@lucid-evolution/lucid";
 import { Blockfrost, Koios } from "@lucid-evolution/provider";
+import type { Provider } from "@lucid-evolution/core-types";
 
 import { getCliConfig } from "./config.js";
 
@@ -31,7 +32,13 @@ type BlockfrostProtocolParametersResponse = {
   };
 };
 
-export async function makeConfiguredProvider(): Promise<Blockfrost | Koios> {
+// Configured provider — in production this is Blockfrost or Koios; in
+// emulator mode the test harness swaps in the in-memory Lucid
+// `Emulator`, which implements the same `Provider` interface from
+// `@lucid-evolution/core-types`.
+export type ConfiguredProvider = Provider;
+
+async function makeRealConfiguredProvider(): Promise<Blockfrost | Koios> {
   const config = getCliConfig();
 
   if (config.cardanoProvider === "Koios") {
@@ -51,18 +58,40 @@ export async function makeConfiguredProvider(): Promise<Blockfrost | Koios> {
   return provider;
 }
 
-export async function makeConfiguredLucid(): Promise<
-  Awaited<ReturnType<typeof Lucid>>
-> {
+export type ProviderFactory = () => Promise<ConfiguredProvider>;
+let activeProviderFactory: ProviderFactory = makeRealConfiguredProvider;
+
+export async function makeConfiguredProvider(): Promise<ConfiguredProvider> {
+  return activeProviderFactory();
+}
+
+// Override the provider factory. Subsequent calls to
+// `makeConfiguredProvider()` return whatever the supplied factory
+// returns. The emulator harness installs an emulator instance here so
+// every CLI helper that looks UTxOs up by outRef hits the in-memory
+// ledger instead of Blockfrost/Koios HTTP.
+export function setProviderFactory(factory: ProviderFactory): void {
+  activeProviderFactory = factory;
+}
+
+export type LucidInstance = Awaited<ReturnType<typeof Lucid>>;
+export type WalletSource = "seed" | "private-key";
+
+export type LucidFactory = () => Promise<LucidInstance>;
+export type WalletSelector = (lucid: LucidInstance) => Promise<WalletSource>;
+
+// Production-mode factories. They keep the original env-based behavior so
+// the live CLI (and `run-all-cli.sh`) keeps working exactly as today.
+async function makeRealConfiguredLucid(): Promise<LucidInstance> {
   const config = getCliConfig();
   const provider = await makeConfiguredProvider();
 
   return Lucid(provider, config.cardanoNetwork);
 }
 
-export async function selectConfiguredWallet(
-  lucid: Awaited<ReturnType<typeof Lucid>>,
-): Promise<"seed" | "private-key"> {
+async function selectRealConfiguredWallet(
+  lucid: LucidInstance,
+): Promise<WalletSource> {
   const seed = process.env.CARDANO_WALLET_SEED?.trim();
   const privateKey = process.env.CARDANO_PRIVATE_KEY?.trim();
 
@@ -79,6 +108,64 @@ export async function selectConfiguredWallet(
   throw new Error(
     "Missing wallet configuration. Set CARDANO_WALLET_SEED or CARDANO_PRIVATE_KEY.",
   );
+}
+
+// Mutable factory references. Tests and the local emulator benchmark swap
+// these to redirect every CLI builder at the in-memory Lucid Emulator
+// without touching any builder's source. Always restore via
+// `resetLucidFactories()` in a `finally` block.
+let activeLucidFactory: LucidFactory = makeRealConfiguredLucid;
+let activeWalletSelector: WalletSelector = selectRealConfiguredWallet;
+
+export async function makeConfiguredLucid(): Promise<LucidInstance> {
+  return activeLucidFactory();
+}
+
+export async function selectConfiguredWallet(
+  lucid: LucidInstance,
+): Promise<WalletSource> {
+  return activeWalletSelector(lucid);
+}
+
+// Override the Lucid factory. Subsequent calls to `makeConfiguredLucid()`
+// return whatever the supplied factory returns. Use from the emulator
+// harness only.
+export function setLucidFactory(factory: LucidFactory): void {
+  activeLucidFactory = factory;
+}
+
+// Override the wallet selector. Subsequent calls to
+// `selectConfiguredWallet(lucid)` delegate to the supplied selector.
+// Use from the emulator harness only.
+export function setWalletSelector(selector: WalletSelector): void {
+  activeWalletSelector = selector;
+}
+
+// Restore the production env-based factories. Tests and benchmarks MUST
+// call this in a `finally` block so production code paths are never left
+// pointed at the emulator after the test completes.
+export function resetLucidFactories(): void {
+  activeLucidFactory = makeRealConfiguredLucid;
+  activeWalletSelector = selectRealConfiguredWallet;
+  activeProviderFactory = makeRealConfiguredProvider;
+  emulatorModeActive = false;
+}
+
+// Emulator-mode flag. When true, helpers like `getNetworkNow` use
+// `lucid.currentSlot()` instead of hitting Blockfrost's `/blocks/latest`
+// endpoint, because the Blockfrost HTTP route always returns the real
+// Preview tip (millions of slots ahead of the emulator's slot 0-based
+// clock), which would build txs with validity bounds outside the
+// emulator's slot range. Production CLI keeps `emulatorModeActive ===
+// false` and is unaffected.
+let emulatorModeActive = false;
+
+export function setEmulatorModeActive(active: boolean): void {
+  emulatorModeActive = active;
+}
+
+export function isEmulatorModeActive(): boolean {
+  return emulatorModeActive;
 }
 
 async function fetchBlockfrostProtocolParameters(

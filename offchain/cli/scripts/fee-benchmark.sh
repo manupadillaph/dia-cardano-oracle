@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Measures on-chain network fees for single update and batch(1..6), repeated CYCLES times.
+# Measures on-chain network fees for single update and batch(1..7), repeated CYCLES times.
 # Requires a bootstrapped state from run-all-cli.sh (--run-id).
 set -euo pipefail
 
@@ -25,8 +25,8 @@ usage: fee-benchmark.sh --run-id RUN_ID [options]
   --bench-run-id ID      benchmark run ID (default: timestamp)
 
 example:
-  fee-benchmark.sh --run-id 20260506-084452
-  fee-benchmark.sh --run-id 20260506-084452 --cycles 3 --top-up-lovelace 150000000
+  fee-benchmark.sh --run-id 20260511-135140
+  fee-benchmark.sh --run-id 20260511-135140 --cycles 3 --top-up-lovelace 150000000
 EOF
 }
 
@@ -90,11 +90,34 @@ echo "[bench] cycles       : $CYCLES"
 echo "[bench] top-up       : $TOP_UP_LOVELACE lovelace"
 echo "[bench] provider     : $CARDANO_PROVIDER"
 
+echo "[bench] fetching protocol parameters"
+PROTOCOL_PARAMS_JSON="$(npm run --silent cli -- preview:protocol)"
+printf '%s\n' "$PROTOCOL_PARAMS_JSON" > "$BENCH_EVIDENCE/protocol-parameters.json"
+PROTOCOL_LIMITS="$(
+  PROTOCOL_PARAMS_JSON="$PROTOCOL_PARAMS_JSON" node --input-type=module <<'NODE'
+const params = JSON.parse(process.env.PROTOCOL_PARAMS_JSON ?? "{}");
+const maxTxExSteps = params.maxTxExSteps ?? params.max_tx_ex_steps;
+const maxTxExMem = params.maxTxExMem ?? params.max_tx_ex_mem;
+if (!maxTxExSteps || !maxTxExMem) {
+  throw new Error("Protocol parameters are missing maxTxExSteps/maxTxExMem.");
+}
+console.log(`${maxTxExSteps} ${maxTxExMem}`);
+NODE
+)"
+PROTOCOL_MAX_TX_EX_STEPS="${PROTOCOL_LIMITS%% *}"
+PROTOCOL_MAX_TX_EX_MEM="${PROTOCOL_LIMITS##* }"
+[[ "$PROTOCOL_MAX_TX_EX_STEPS" =~ ^[0-9]+$ ]] \
+  || { echo "[bench] invalid maxTxExSteps: $PROTOCOL_MAX_TX_EX_STEPS" >&2; exit 1; }
+[[ "$PROTOCOL_MAX_TX_EX_MEM" =~ ^[0-9]+$ ]] \
+  || { echo "[bench] invalid maxTxExMem: $PROTOCOL_MAX_TX_EX_MEM" >&2; exit 1; }
+echo "[bench] max tx ex steps: $PROTOCOL_MAX_TX_EX_STEPS"
+echo "[bench] max tx ex mem  : $PROTOCOL_MAX_TX_EX_MEM"
+
 # ── Pair configuration ────────────────────────────────────────────────────────
 # update-1 uses btc-usd; batch-N uses first N slugs from BATCH_SLUGS
 UPDATE_SLUG="btc-usd"
 
-declare -ar BATCH_SLUGS=("btc-usd" "eth-usd" "ada-usd" "usdt-usd" "dai-usd" "sol-usd")
+declare -ar BATCH_SLUGS=("btc-usd" "eth-usd" "ada-usd" "usdt-usd" "dai-usd" "sol-usd" "bnb-usd")
 
 declare -Ar PAIR_SYMBOLS=(
   ["btc-usd"]="BTC/USD"
@@ -103,6 +126,7 @@ declare -Ar PAIR_SYMBOLS=(
   ["usdt-usd"]="USDT/USD"
   ["dai-usd"]="DAI/USD"
   ["sol-usd"]="SOL/USD"
+  ["bnb-usd"]="BNB/USD"
 )
 
 # Base prices (starting point); each intent gets base + seq*1M to guarantee uniqueness.
@@ -113,6 +137,7 @@ declare -Ar BASE_PRICES=(
   ["usdt-usd"]="100200000"
   ["dai-usd"]="100200000"
   ["sol-usd"]="18600000000"
+  ["bnb-usd"]="61600000000"
 )
 
 # Global sequence counter — incremented directly in generate_intent (not in subshell)
@@ -200,10 +225,11 @@ declare -a FEES_BATCH_3=() CPU_BATCH_3=() MEM_BATCH_3=()
 declare -a FEES_BATCH_4=() CPU_BATCH_4=() MEM_BATCH_4=()
 declare -a FEES_BATCH_5=() CPU_BATCH_5=() MEM_BATCH_5=()
 declare -a FEES_BATCH_6=() CPU_BATCH_6=() MEM_BATCH_6=()
+declare -a FEES_BATCH_7=() CPU_BATCH_7=() MEM_BATCH_7=()
 
 # ── Top-up receiver ───────────────────────────────────────────────────────────
-# Each cycle costs ~(1+1+2+3+4+5+6) = 22 updates × 2 ADA protocol fee = 44 ADA.
-# Default top-up of 260 ADA covers 5 cycles (220 ADA) with margin.
+# Each cycle costs ~(1+1+2+3+4+5+6+7) = 29 protocol-fee-bearing updates.
+# Default top-up of 260 ADA covers 5 cycles with margin.
 echo ""
 echo "[bench] ── Top-up receiver: $TOP_UP_LOVELACE lovelace ──"
 run_tx "$BENCH_EVIDENCE/topup.log" \
@@ -232,8 +258,8 @@ for cycle in $(seq 1 "$CYCLES"); do
   echo "[bench] update-1  fee: $fee lovelace  cpu: $cpu  mem: $mem"
   FEES_UPDATE+=("$fee"); CPU_UPDATE+=("$cpu"); MEM_UPDATE+=("$mem")
 
-  # ── Batch 1..6: N pairs per tx ─────────────────────────────────────────────
-  for size in 1 2 3 4 5 6; do
+  # ── Batch 1..7: N pairs per tx ─────────────────────────────────────────────
+  for size in 1 2 3 4 5 6 7; do
     bat_tag="bat${size}-c${cycle}"
 
     # Fresh intents for all N slugs (each with a unique price via PRICE_SEQ)
@@ -263,6 +289,7 @@ for cycle in $(seq 1 "$CYCLES"); do
       4) FEES_BATCH_4+=("$fee"); CPU_BATCH_4+=("$cpu"); MEM_BATCH_4+=("$mem") ;;
       5) FEES_BATCH_5+=("$fee"); CPU_BATCH_5+=("$cpu"); MEM_BATCH_5+=("$mem") ;;
       6) FEES_BATCH_6+=("$fee"); CPU_BATCH_6+=("$cpu"); MEM_BATCH_6+=("$mem") ;;
+      7) FEES_BATCH_7+=("$fee"); CPU_BATCH_7+=("$cpu"); MEM_BATCH_7+=("$mem") ;;
     esac
   done
 done
@@ -278,6 +305,7 @@ FEES_BATCH_3_STR="${FEES_BATCH_3[*]:-}"
 FEES_BATCH_4_STR="${FEES_BATCH_4[*]:-}"
 FEES_BATCH_5_STR="${FEES_BATCH_5[*]:-}"
 FEES_BATCH_6_STR="${FEES_BATCH_6[*]:-}"
+FEES_BATCH_7_STR="${FEES_BATCH_7[*]:-}"
 CPU_UPDATE_STR="${CPU_UPDATE[*]:-}"
 CPU_BATCH_1_STR="${CPU_BATCH_1[*]:-}"
 CPU_BATCH_2_STR="${CPU_BATCH_2[*]:-}"
@@ -285,6 +313,7 @@ CPU_BATCH_3_STR="${CPU_BATCH_3[*]:-}"
 CPU_BATCH_4_STR="${CPU_BATCH_4[*]:-}"
 CPU_BATCH_5_STR="${CPU_BATCH_5[*]:-}"
 CPU_BATCH_6_STR="${CPU_BATCH_6[*]:-}"
+CPU_BATCH_7_STR="${CPU_BATCH_7[*]:-}"
 MEM_UPDATE_STR="${MEM_UPDATE[*]:-}"
 MEM_BATCH_1_STR="${MEM_BATCH_1[*]:-}"
 MEM_BATCH_2_STR="${MEM_BATCH_2[*]:-}"
@@ -292,6 +321,7 @@ MEM_BATCH_3_STR="${MEM_BATCH_3[*]:-}"
 MEM_BATCH_4_STR="${MEM_BATCH_4[*]:-}"
 MEM_BATCH_5_STR="${MEM_BATCH_5[*]:-}"
 MEM_BATCH_6_STR="${MEM_BATCH_6[*]:-}"
+MEM_BATCH_7_STR="${MEM_BATCH_7[*]:-}"
 
 FEES_UPDATE_STR="$FEES_UPDATE_STR" \
 FEES_BATCH_1_STR="$FEES_BATCH_1_STR" \
@@ -300,6 +330,7 @@ FEES_BATCH_3_STR="$FEES_BATCH_3_STR" \
 FEES_BATCH_4_STR="$FEES_BATCH_4_STR" \
 FEES_BATCH_5_STR="$FEES_BATCH_5_STR" \
 FEES_BATCH_6_STR="$FEES_BATCH_6_STR" \
+FEES_BATCH_7_STR="$FEES_BATCH_7_STR" \
 CPU_UPDATE_STR="$CPU_UPDATE_STR" \
 CPU_BATCH_1_STR="$CPU_BATCH_1_STR" \
 CPU_BATCH_2_STR="$CPU_BATCH_2_STR" \
@@ -307,6 +338,7 @@ CPU_BATCH_3_STR="$CPU_BATCH_3_STR" \
 CPU_BATCH_4_STR="$CPU_BATCH_4_STR" \
 CPU_BATCH_5_STR="$CPU_BATCH_5_STR" \
 CPU_BATCH_6_STR="$CPU_BATCH_6_STR" \
+CPU_BATCH_7_STR="$CPU_BATCH_7_STR" \
 MEM_UPDATE_STR="$MEM_UPDATE_STR" \
 MEM_BATCH_1_STR="$MEM_BATCH_1_STR" \
 MEM_BATCH_2_STR="$MEM_BATCH_2_STR" \
@@ -314,10 +346,13 @@ MEM_BATCH_3_STR="$MEM_BATCH_3_STR" \
 MEM_BATCH_4_STR="$MEM_BATCH_4_STR" \
 MEM_BATCH_5_STR="$MEM_BATCH_5_STR" \
 MEM_BATCH_6_STR="$MEM_BATCH_6_STR" \
+MEM_BATCH_7_STR="$MEM_BATCH_7_STR" \
 BENCH_EVIDENCE="$BENCH_EVIDENCE" \
 BENCH_RUN_ID="$BENCH_RUN_ID" \
 BASE_RUN_ID="$EXISTING_RUN_ID" \
 CYCLES="$CYCLES" \
+PROTOCOL_MAX_TX_EX_STEPS="$PROTOCOL_MAX_TX_EX_STEPS" \
+PROTOCOL_MAX_TX_EX_MEM="$PROTOCOL_MAX_TX_EX_MEM" \
 node --input-type=module <<'NODE'
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -338,8 +373,8 @@ function toAda(lovelace) {
 function minOf(arr) { return arr.length === 0 ? 0 : Math.min(...arr); }
 function maxOf(arr) { return arr.length === 0 ? 0 : Math.max(...arr); }
 
-const OPS = ["update-1", "batch-1", "batch-2", "batch-3", "batch-4", "batch-5", "batch-6"];
-const suffixes = ["UPDATE", "BATCH_1", "BATCH_2", "BATCH_3", "BATCH_4", "BATCH_5", "BATCH_6"];
+const OPS = ["update-1", "batch-1", "batch-2", "batch-3", "batch-4", "batch-5", "batch-6", "batch-7"];
+const suffixes = ["UPDATE", "BATCH_1", "BATCH_2", "BATCH_3", "BATCH_4", "BATCH_5", "BATCH_6", "BATCH_7"];
 
 const fees = Object.fromEntries(OPS.map((op, i) => [op, parseInts(process.env[`FEES_${suffixes[i]}_STR`])]));
 const cpus = Object.fromEntries(OPS.map((op, i) => [op, parseInts(process.env[`CPU_${suffixes[i]}_STR`])]));
@@ -403,24 +438,26 @@ const cpuRows = OPS.map((op) => {
   return `| ${op.padEnd(10)} | ${String(c).padStart(15)} | ${String(minOf(cpus[op])).padStart(15)} | ${String(maxOf(cpus[op])).padStart(15)} | ${String(m).padStart(12)} | ${String(minOf(mems[op])).padStart(12)} | ${String(maxOf(mems[op])).padStart(12)} |`;
 });
 
-// Cardano per-tx execution unit limits (Babbage/Conway era)
-const CPU_LIMIT = 10_000_000_000;
-const MEM_LIMIT = 14_000_000;
-const batch6cpu = avg(cpus["batch-6"]);
-const batch6mem = avg(mems["batch-6"]);
-const cpuPct = ((batch6cpu / CPU_LIMIT) * 100).toFixed(1);
-const memPct = ((batch6mem / MEM_LIMIT) * 100).toFixed(1);
+// Preview per-tx execution unit limits
+const CPU_LIMIT = Number(process.env.PROTOCOL_MAX_TX_EX_STEPS);
+const MEM_LIMIT = Number(process.env.PROTOCOL_MAX_TX_EX_MEM);
+const maxMeasuredBatch = 7;
+const maxMeasuredOp = `batch-${maxMeasuredBatch}`;
+const maxMeasuredCpu = avg(cpus[maxMeasuredOp]);
+const maxMeasuredMem = avg(mems[maxMeasuredOp]);
+const cpuPct = ((maxMeasuredCpu / CPU_LIMIT) * 100).toFixed(1);
+const memPct = ((maxMeasuredMem / MEM_LIMIT) * 100).toFixed(1);
 
-// Linear regression over batch-1..batch-6: fee = base + k*N
+// Linear regression over measured batch data: fee = base + k*N
 const batchOps = OPS.filter((op) => op.startsWith("batch-"));
 const pts = batchOps.map((op, i) => [i + 1, avg(fees[op])]);
-const n6 = pts.length;
+const nMeasured = pts.length;
 const sumN  = pts.reduce((a, [x]) => a + x, 0);
 const sumF  = pts.reduce((a, [, y]) => a + y, 0);
 const sumN2 = pts.reduce((a, [x]) => a + x * x, 0);
 const sumNF = pts.reduce((a, [x, y]) => a + x * y, 0);
-const kReg    = (n6 * sumNF - sumN * sumF) / (n6 * sumN2 - sumN ** 2);
-const baseReg = (sumF - kReg * sumN) / n6;
+const kReg    = (nMeasured * sumNF - sumN * sumF) / (nMeasured * sumN2 - sumN ** 2);
+const baseReg = (sumF - kReg * sumN) / nMeasured;
 
 const fmtLv = (v) => Math.round(v).toLocaleString("en-US");
 
@@ -449,7 +486,7 @@ const md = `\
 
 ## Network Fee Summary (lovelace / ADA)
 
-> On-chain transaction fees paid to Cardano. Protocol fees (2 ADA × pairs) are separate.
+> On-chain transaction fees paid to Cardano. Protocol fees are separate and currently use 0.6 ADA + 0.4 ADA × N pairs.
 
 | Operation  | Samples | Avg (lovelace) | Avg (ADA)  | Min (lovelace) | Max (lovelace) |
 |------------|---------|----------------|------------|----------------|----------------|
@@ -465,18 +502,18 @@ ${cpuRows.join("\n")}
 
 ## Cardano Budget Limits & Utilization
 
-> Per-tx execution unit limits on Cardano (Babbage/Conway era).
+> Per-tx execution unit limits on Cardano Preview.
 
-| Resource | Limit            | batch-6 avg    | batch-6 % used |
+| Resource | Limit            | batch-${maxMeasuredBatch} avg    | batch-${maxMeasuredBatch} % used |
 |----------|-----------------|----------------|----------------|
-| CPU      | 10,000,000,000  | ${fmtLv(batch6cpu).padStart(14)} |         ${cpuPct}% |
-| Memory   | 14,000,000      | ${fmtLv(batch6mem).padStart(14)} |        **${memPct}%** |
+| CPU      | ${fmtLv(CPU_LIMIT).padStart(15)} | ${fmtLv(maxMeasuredCpu).padStart(14)} |         ${cpuPct}% |
+| Memory   | ${fmtLv(MEM_LIMIT).padStart(15)} | ${fmtLv(maxMeasuredMem).padStart(14)} |        **${memPct}%** |
 
-Memory is the binding constraint. batch-6 sits at ~${memPct}% of the memory limit — that is why batch-7 and above fail.
+Memory is the binding constraint. batch-${maxMeasuredBatch} sits at ~${memPct}% of the memory limit — the preview run showed batch-8 and above fail.
 
 ## Fee Estimation Model
 
-Linear regression over batch-1 … batch-6 data (least squares):
+Linear regression over batch-1 … batch-${maxMeasuredBatch} data (least squares):
 
 \`\`\`
 fee (lovelace) ≈ ${fmtLv(baseReg)} + ${fmtLv(kReg)} × N
@@ -506,15 +543,15 @@ ${(() => {
 >
 > The table below compares options for the **protocol fee** design, using the measured network fees as the cost baseline.
 
-| Model | Formula | Example: 1 pair | Example: 6 pairs | Notes |
+| Model | Formula | Example: 1 pair | Example: 7 pairs | Notes |
 |-------|---------|-----------------|------------------|-------|
-| **Flat per-pair** (current) | 2 ADA × N | 2 ADA | 12 ADA | Simple; over-collects at scale |
-| **Base + per-pair** | 0.6 + 0.40 × N ADA | 1.00 ADA | 3.00 ADA | Tracks real cost closely |
+| **Flat per-pair** | 2 ADA × N | 2 ADA | 14 ADA | Simple; over-collects at scale |
+| **Base + per-pair** (current) | 0.6 + 0.40 × N ADA | 1.00 ADA | 3.40 ADA | Tracks real cost closely |
 
 ## Notes
 
 - \`update-1\` — single oracle price update (1 pair: BTC/USD).
-- \`batch-N\` — N simultaneous price updates in one transaction (pairs: BTC/USD … up to SOL/USD).
+- \`batch-N\` — N simultaneous price updates in one transaction (pairs: BTC/USD … up to BNB/USD).
 - Data collected on Cardano **preview** testnet.
 `;
 

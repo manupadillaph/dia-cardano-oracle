@@ -44,6 +44,7 @@ function printUsage(): void {
   npm run cli -- preview:payment-hook:parameterize --state ./state/preview/config-bootstrap.json
   npm run cli -- preview:payment-hook:reference-script --state ./state/preview/config-bootstrap.json [--build-only]
   npm run cli -- preview:payment-hook:bootstrap --state ./state/preview/config-bootstrap.json [--build-only]
+  npm run cli -- preview:payment-hook:update --input ./state/preview/hook-updates/payment-hook-update.preview.json --state ./state/preview/config-bootstrap.json [--build-only]
   npm run cli -- preview:receiver:parameterize --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json
   npm run cli -- preview:reference-scripts:publish-client --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:receiver:bootstrap --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
@@ -532,6 +533,25 @@ async function run(): Promise<void> {
       const buildOnly = hasBuildOnlyFlag();
       const result = await paymentHookWithdraw({
         amountLovelace: requireFlagValue("--amount-lovelace"),
+        statePath,
+        buildOnly,
+      });
+      if (statePath && !buildOnly) {
+        await writeJsonOutput(statePath, result);
+      }
+      printJson(result);
+      return;
+    }
+
+    case "preview:payment-hook:update": {
+      const { paymentHookUpdate } = await import(
+        "./transactions/payment-hook-update.js"
+      );
+      getCliConfig();
+      const statePath = optionalFlagValue("--state");
+      const buildOnly = hasBuildOnlyFlag();
+      const result = await paymentHookUpdate({
+        inputPath: requireInputPath(),
         statePath,
         buildOnly,
       });

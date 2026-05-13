@@ -29,7 +29,22 @@ export function reportTxSignBuilderMetrics(
   reportProgress(
     `Tx resources: fee=${metrics.feeAda} ADA (${metrics.feeLovelace} lovelace), cpu=${metrics.exUnits.cpu}, mem=${metrics.exUnits.mem}`,
   );
+  if (activeMetricsObserver) {
+    activeMetricsObserver(metrics);
+  }
   return metrics;
+}
+
+// Optional out-of-band hook. When set, every `reportTxSignBuilderMetrics`
+// call also invokes the observer with the same metrics object that gets
+// logged to the progress reporter. Used by the emulator benchmark to
+// capture per-step exec-units without intercepting stderr. Production
+// CLI never sets this, so behavior is unchanged.
+type MetricsObserver = (metrics: TxResourceMetrics) => void;
+let activeMetricsObserver: MetricsObserver | null = null;
+
+export function setTxMetricsObserver(observer: MetricsObserver | null): void {
+  activeMetricsObserver = observer;
 }
 
 function collectTransactionExUnits(tx: CML.Transaction): TxResourceMetrics["exUnits"] {

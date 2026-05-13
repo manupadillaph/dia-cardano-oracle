@@ -35,6 +35,7 @@ import {
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 import { assertNftBootstrapDestinationIsNotFundingWallet } from "../preflight/bootstrap-pay.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 export async function paymentHookBootstrap(args: {
   statePath?: string;
@@ -105,6 +106,7 @@ export async function paymentHookBootstrap(args: {
     resolvedInput.minUtxoLovelace,
     "minUtxoLovelace",
   );
+  assertPositiveMinUtxoLovelace(paymentHookMinUtxoLovelace, "PaymentHook");
   const fundingUtxos =
     (paymentHookBootstrapUtxo.assets.lovelace ?? 0n) >=
     paymentHookMinUtxoLovelace + 4_000_000n

@@ -31,6 +31,7 @@ import {
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 import { assertNftBootstrapDestinationIsNotFundingWallet } from "../preflight/bootstrap-pay.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 export async function receiverBootstrap(args: {
   statePath?: string;
@@ -277,9 +278,12 @@ function resolveReceiverBootstrapInput(state: ClientStateArtifact): {
     );
   }
 
+  const resolvedMinUtxoLovelace = toBigInt(minUtxoLovelace, "minUtxoLovelace");
+  assertPositiveMinUtxoLovelace(resolvedMinUtxoLovelace, "Receiver");
+
   return {
     clientId,
     receiverAssetName: normalizeHex(receiverAssetName, "receiverAssetName"),
-    minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
+    minUtxoLovelace: resolvedMinUtxoLovelace.toString(),
   };
 }

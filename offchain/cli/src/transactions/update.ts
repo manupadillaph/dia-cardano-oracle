@@ -54,6 +54,7 @@ import {
   waitForWalletSettlement,
   waitForUnitUtxoReplacement,
 } from "../core/chain-helpers.js";
+import { buildPairApplyUpdateRedeemer } from "../core/redeemers.js";
 
 export async function submitOracleUpdate(args: {
   intentPath: string;
@@ -326,7 +327,7 @@ export async function submitOracleUpdate(args: {
     throw new Error("Receiver balance is not sufficient to pay the protocol fee.");
   }
 
-  const pairRedeemer = Data.to(new Constr(0, []));
+  const pairRedeemer = buildPairApplyUpdateRedeemer();
   const pairMintRedeemer = Data.to(new Constr<PlutusData>(0, []));
   const receiverRedeemer = Data.to(new Constr(1, [])); // AccrueFee redeemer
   const coordinatorRedeemer = Data.to(
@@ -345,9 +346,9 @@ export async function submitOracleUpdate(args: {
   const nextReceiverDatumCbor = buildReceiverDatumCbor(nextReceiverState);
 
   reportProgress("Building Preview oracle update transaction");
-  // The on-chain coordinator (and pair_state.pair_intent_satisfied) require
-  // a finite tx validity range so intent expiry / bootstrap freshness can
-  // be evaluated. Cap the upper bound below the signed intent's expiry.
+  // The on-chain coordinator and pair_state binding require a finite tx
+  // validity range so intent expiry / bootstrap freshness can be evaluated.
+  // Cap the upper bound below the signed intent's expiry.
   const txValidFromMs = slotBackoffUnixTimeMs(lucid, networkNow.slot);
   const intentExpiryMs = Number(intent.expiry) * 1000;
   const txValidToMs = Math.min(

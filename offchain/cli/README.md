@@ -10,9 +10,11 @@ This CLI now uses three kinds of files:
 - `generated payloads`: unsigned intents, signed intents, config-update drafts, and batch manifests under `./state/preview`
 - direct CLI flags: simple ADA values such as `--amount-lovelace` (the amount the user moves on top-up/withdraw)
 
-The protocol's `minUtxoLovelace` is chosen ONCE in `preview:protocol:init` and
-inherited by every datum the CLI creates (config, paymentHook, receiver, pair).
-There is no per-command flag for it. Outputs that carry a reference script
+The protocol's initial `minUtxoLovelace` is chosen in `preview:protocol:init`
+and inherited by the datums the CLI creates (Config, PaymentHook, Receiver,
+Pair). It is still admin-updatable later for all four datum families:
+Config and PaymentHook use general admin-update flows, while Receiver and Pair
+use dedicated `UpdateMinUtxo` flows. Outputs that carry a reference script
 compute their lovelace automatically from the on-chain protocol parameters
 (`coinsPerUtxoByte`); the CLI logs the effective lovelace of every output it
 builds, so the on-chain reality is never hidden.
@@ -315,7 +317,7 @@ For every later update, generate a fresh signed intent with a new nonce, timesta
 
 - If the pair artifact does not exist yet, it mints the Pair NFT and creates the first Pair UTxO with the signed intent's real price datum.
 - If the pair artifact already exists, it consumes the current Pair UTxO and writes the next datum.
-- The pair's `minUtxoLovelace` is inherited from `configState.minUtxoLovelace` (set once in `preview:protocol:init`).
+- New Pair UTxOs inherit the current `configState.minUtxoLovelace`; existing Pair UTxOs can later be adjusted with `preview:pair:update-min-utxo`.
 
 ```sh
 npm run cli -- preview:update \

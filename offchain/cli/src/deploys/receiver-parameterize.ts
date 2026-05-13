@@ -23,6 +23,7 @@ import {
   toBigInt,
 } from "../core/chain-helpers.js";
 import { normalizeHex } from "../core/dia-intent.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 export async function parameterizeReceiverScripts(args: {
   statePath?: string;
@@ -99,13 +100,15 @@ export async function parameterizeReceiverScripts(args: {
     configAssetName,
     receiverHash: receiverValidatorHash,
   });
+  const receiverMinUtxoLovelace = toBigInt(
+    resolvedInput.minUtxoLovelace,
+    "minUtxoLovelace",
+  );
+  assertPositiveMinUtxoLovelace(receiverMinUtxoLovelace, "Receiver");
   const receiverState = {
     balanceLovelace: "0",
     accruedToHookLovelace: "0",
-    minUtxoLovelace: toBigInt(
-      resolvedInput.minUtxoLovelace,
-      "minUtxoLovelace",
-    ).toString(),
+    minUtxoLovelace: receiverMinUtxoLovelace.toString(),
   };
 
   return {
@@ -160,10 +163,13 @@ function resolveReceiverParameterizeInput(state: ClientStateArtifact): ReceiverP
     );
   }
 
+  const resolvedMinUtxoLovelace = toBigInt(minUtxoLovelace, "minUtxoLovelace");
+  assertPositiveMinUtxoLovelace(resolvedMinUtxoLovelace, "Receiver");
+
   return {
     clientId,
     receiverAssetName: normalizeHex(receiverAssetName, "receiverAssetName"),
-    minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
+    minUtxoLovelace: resolvedMinUtxoLovelace.toString(),
   };
 }
 

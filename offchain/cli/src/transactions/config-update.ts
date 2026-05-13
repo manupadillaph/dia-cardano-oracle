@@ -33,10 +33,10 @@ import {
   waitForUnitUtxoReplacement,
 } from "../core/chain-helpers.js";
 import {
-  assertConfigMinUtxoLovelaceImmutable,
   assertConfigUtxoLivesAtValidatorAddress,
   assertHookCoordinatorConsistency,
   assertPaymentKeyHashIsConfigSigner,
+  assertPositiveMinUtxoLovelace,
 } from "../preflight/index.js";
 
 type ConfigUpdateInput = {
@@ -52,6 +52,7 @@ type ConfigUpdateInput = {
   baseFeeLovelace?: string;
   perPairFeeLovelace?: string;
   maxBootstrapDriftSeconds?: string;
+  minUtxoLovelace?: string;
   paymentHookRef?: {
     policyId: string;
     assetName: string;
@@ -127,6 +128,10 @@ export async function configUpdate(args: {
   const nextConfigState = resolveNextConfigState(state, input);
   const configDatumCbor = buildConfigDatumCbor(nextConfigState);
   const adminUpdateRedeemer = Data.to(new Constr(0, []));
+  const nextConfigAssets = {
+    ...currentConfigUtxo.assets,
+    lovelace: BigInt(nextConfigState.minUtxoLovelace),
+  };
 
   reportProgress("Building Preview config update transaction");
   let txBuilder = lucid
@@ -137,7 +142,7 @@ export async function configUpdate(args: {
     .pay.ToContract(
       state.scripts.configValidatorAddress,
       { kind: "inline", value: configDatumCbor },
-      { ...currentConfigUtxo.assets },
+      nextConfigAssets,
     );
 
   if (isAnyReferenceScriptMissing(missingReferenceScript)) {
@@ -288,13 +293,13 @@ function resolveNextConfigState(
         : toBigInt(input.maxBootstrapDriftSeconds, "maxBootstrapDriftSeconds").toString(),
     paymentHookRef: nextPaymentHookRef,
     updateCoordinatorCredential: nextCoordinatorCredential,
-    minUtxoLovelace: state.configState.minUtxoLovelace,
+    minUtxoLovelace:
+      input.minUtxoLovelace === undefined
+        ? state.configState.minUtxoLovelace
+        : toBigInt(input.minUtxoLovelace, "minUtxoLovelace").toString(),
   };
 
-  assertConfigMinUtxoLovelaceImmutable(
-    state.configState.minUtxoLovelace,
-    next.minUtxoLovelace,
-  );
+  assertPositiveMinUtxoLovelace(BigInt(next.minUtxoLovelace), "Config");
   assertHookCoordinatorConsistency(
     next.paymentHookRef,
     next.updateCoordinatorCredential,

@@ -60,6 +60,7 @@ import {
   waitForUnitUtxoReplacement,
   writeJsonFile,
 } from "../core/chain-helpers.js";
+import { buildPairApplyUpdateRedeemer } from "../core/redeemers.js";
 
 type BatchUpdateEntry = {
   statePath: string;
@@ -346,7 +347,6 @@ export async function submitBatchOracleUpdate(args: {
     throw new Error("Receiver balance is not sufficient to pay the protocol fee batch.");
   }
 
-  const pairRedeemer = Data.to(new Constr(0, []));
   const receiverRedeemer = Data.to(new Constr(1, []));
   const coordinatorRedeemer = Data.to(
     new Constr<PlutusData>(1, [
@@ -376,14 +376,13 @@ export async function submitBatchOracleUpdate(args: {
         ),
       })),
   );
-  const currentPairUtxos = currentPairEntries.map(({ utxo }) => utxo);
   const currentPairUtxoByUnit = new Map(
     currentPairEntries.map(({ unit, utxo }) => [unit, utxo]),
   );
 
   reportProgress("Building Preview oracle batch update transaction");
   // Finite tx validity range required by the on-chain coordinator
-  // (intent_expiry_satisfied) and pair_state.pair_intent_satisfied.
+  // (intent_expiry_satisfied) and pair_state indexed witness binding.
   // Cap upper bound below the earliest intent expiry in the batch.
   const earliestExpirySec = preparedUpdates.reduce(
     (min, u) => (u.intent.expiry < min ? u.intent.expiry : min),
@@ -402,8 +401,8 @@ export async function submitBatchOracleUpdate(args: {
     .collectFrom([currentReceiverUtxo], receiverRedeemer)
     .withdraw(state.scripts.coordinatorRewardAddress, 0n, coordinatorRedeemer);
 
-  if (currentPairUtxos.length > 0) {
-    txBuilder = txBuilder.collectFrom(currentPairUtxos, pairRedeemer);
+  for (const { utxo } of currentPairEntries) {
+    txBuilder = txBuilder.collectFrom([utxo], buildPairApplyUpdateRedeemer());
   }
 
   if (missingReferenceScripts.receiver) {
@@ -676,12 +675,34 @@ export function resolvePairArtifact(
   };
 }
 
+// Canonical batch order — the on-chain coordinator rejects any batch whose
+// witnesses are not strictly ascending by `bytearray.compare` on
+// `pair_token_name` during its main witness walk. Pair token names are
+// `blake2b_256(pair_id)` bytes serialized as lowercase even-length hex by
+// the CLI, so a bytewise compare on the decoded bytes is equivalent to a
+// plain lexicographic compare on the normalized hex string. We avoid
+// `localeCompare` because it can apply locale-sensitive collation that
+// diverges from byte order on some platforms; we normalize first to
+// guarantee that the input matches the on-chain expectation.
 export function sortBatchUpdatesByPairTokenName<
   T extends { artifact: { pair: { tokenName: string } } },
 >(updates: T[]): T[] {
-  return [...updates].sort((left, right) =>
-    left.artifact.pair.tokenName.localeCompare(right.artifact.pair.tokenName),
-  );
+  const normalized = updates.map((update) => ({
+    update,
+    tokenName: normalizeHex(update.artifact.pair.tokenName, "pair.tokenName"),
+  }));
+  normalized.sort((left, right) => compareHexBytewise(left.tokenName, right.tokenName));
+  return normalized.map(({ update }) => update);
+}
+
+// Bytewise comparison on two already-normalized (lowercase, even-length)
+// hex strings. Equivalent to `bytearray.compare` on the decoded bytes:
+// hex digits 0-9 < a-f preserve byte order, and pair-wise hex chars
+// inherit byte order from their numeric value.
+export function compareHexBytewise(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 export function ensureCompatibleBatch(states: ResolvedPairStateArtifact[]): void {

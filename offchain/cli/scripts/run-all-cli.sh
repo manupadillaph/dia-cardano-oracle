@@ -17,7 +17,7 @@ usage: run-all-cli.sh [--clean-previous=false|true] [--from-step N] [--run-id ID
 examples:
   run-all-cli.sh
   run-all-cli.sh --clean-previous=true
-  run-all-cli.sh --from-step 13 --run-id 20260506-030904
+  run-all-cli.sh --from-step 11 --run-id 20260513-130106
 EOF
 }
 
@@ -751,6 +751,15 @@ function extractTxHash(content) {
   return m ? m[1] : null;
 }
 
+// Parse the `execution went over budget Mem <signed> CPU <signed>` line
+// produced by the node when a tx fails before submission. Returns the
+// signed Mem and CPU deltas so callers can identify the binding dimension.
+function extractOverBudget(content) {
+  const m = content.match(/over budget Mem (-?\d+) CPU (-?\d+)/);
+  if (!m) return null;
+  return { mem: Number(m[1]), cpu: Number(m[2]) };
+}
+
 function extractMinLovelaceValues(content, ...keys) {
   const result = {};
   for (const key of keys) {
@@ -924,11 +933,63 @@ const feeTableRows = stepData
   .filter((s) => s.feeLovelace && s.feeLovelace > 0n)
   .map((s) => `| ${s.label} | ${s.txHash ? `\`${s.txHash.slice(0, 16)}…\`` : "—"} | ${s.feeAda} ADA |`);
 
-// Batch attempt rows
-const batchAttemptRows = batchAttempts.map((sz) => {
-  const logName = `25-update-batch-${sz}.log`;
-  return `| \`preview:update:batch\` (${sz} pairs, attempted) | *(ExUnits over budget — not submitted)* | 0 ADA | [\`${logName}\`](./${logName}) |`;
-});
+// Batch attempt rows — annotate each with the actual over-budget dimension
+// reported by the node (Mem or CPU) so the narrative matches the logs.
+const batchAttemptReasons = await Promise.all(
+  batchAttempts.map(async (sz) => {
+    const logName = `25-update-batch-${sz}.log`;
+    const content = await readLogSafe(logName);
+    const over = extractOverBudget(content);
+    return { sz, logName, over };
+  }),
+);
+function reasonLabel(over) {
+  if (!over) return "execution budget exceeded — not submitted";
+  if (over.mem < 0 && over.cpu >= 0) return `memory budget exceeded — Mem ${over.mem} — not submitted`;
+  if (over.cpu < 0 && over.mem >= 0) return `CPU budget exceeded — CPU ${over.cpu} — not submitted`;
+  return `execution budget exceeded — Mem ${over.mem} CPU ${over.cpu} — not submitted`;
+}
+const batchAttemptRows = batchAttemptReasons.map(({ sz, logName, over }) =>
+  `| \`preview:update:batch\` (${sz} pairs, attempted) | *(${reasonLabel(over)})* | 0 ADA | [\`${logName}\`](./${logName}) |`,
+);
+
+// Decide the binding dimension for the narrative based on the captured
+// over-budget reasons. If every failure was memory-bound, say so explicitly.
+function deriveBindingDimension(reasons) {
+  if (reasons.length === 0) return null;
+  const dims = reasons.map(({ over }) => {
+    if (!over) return "unknown";
+    if (over.mem < 0 && over.cpu >= 0) return "memory";
+    if (over.cpu < 0 && over.mem >= 0) return "cpu";
+    return "both";
+  });
+  if (dims.every((d) => d === "memory")) return "memory";
+  if (dims.every((d) => d === "cpu")) return "cpu";
+  return "mixed";
+}
+const bindingDimension = deriveBindingDimension(batchAttemptReasons);
+function batchNarrative(reasons, successSize, binding) {
+  if (reasons.length === 0) return `Batch size **${successSize}** succeeded.`;
+  const sizes = reasons.map((r) => r.sz).join(", ");
+  let preface;
+  if (binding === "memory") {
+    preface =
+      `Batch sizes ${sizes} were attempted first but exceeded the per-tx Plutus ` +
+      `**memory** budget; the node reported \`execution went over budget Mem\` ` +
+      `with negative memory deltas while CPU stayed within budget, so memory — ` +
+      `not CPU steps — is the binding constraint on this bytecode.`;
+  } else if (binding === "cpu") {
+    preface =
+      `Batch sizes ${sizes} were attempted first but exceeded the per-tx Plutus ` +
+      `**CPU** budget; the node reported \`execution went over budget CPU\` ` +
+      `with negative CPU deltas while memory stayed within budget.`;
+  } else {
+    preface =
+      `Batch sizes ${sizes} were attempted first but exceeded the per-tx Plutus ` +
+      `execution budget.`;
+  }
+  return `${preface} Batch size **${successSize}** succeeded.`;
+}
 
 // Explorer rows for key txs
 const explorerSteps = [
@@ -1027,7 +1088,7 @@ ${stepData.filter(s => s.log === "24-receiver-top-up-2.log").map(s => txRow(`24 
 
 ### Batch update — coordinator \`ApplyBatch\`
 
-${batchAttempts.length > 0 ? `Batch sizes ${batchAttempts.join(", ")} were attempted first but exceeded the per-tx Plutus ExUnits budget (each secp256k1 ECDSA verification costs ~440M CPU steps; beyond ${successBatchSize} verifications the batch surpasses the ~10B per-tx ceiling).` : ""} Batch size **${successBatchSize}** succeeded.
+${batchNarrative(batchAttemptReasons, successBatchSize, bindingDimension)}
 
 | Step | Operation | Tx hash | Fee | Log |
 | --- | --- | --- | --- | --- |

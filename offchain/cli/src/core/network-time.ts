@@ -1,6 +1,7 @@
 import { slotToUnixTime, type LucidEvolution } from "@lucid-evolution/lucid";
 
 import { getCliConfig } from "./config.js";
+import { isEmulatorModeActive } from "./lucid.js";
 
 const TX_VALIDITY_START_BACK_SLOTS = 60;
 
@@ -27,16 +28,27 @@ async function fetchBlockfrostTipSlot(apiUrl: string, projectId: string): Promis
 export async function getNetworkNow(
   lucid: Awaited<ReturnType<typeof import("./lucid.js").makeConfiguredLucid>>,
 ): Promise<NetworkNow> {
-  const config = getCliConfig();
   let slot: number;
+  let network: "Preview" | "Preprod" | "Mainnet" | "Custom";
 
-  if (config.cardanoProvider === "Blockfrost") {
-    slot = await fetchBlockfrostTipSlot(config.blockfrostApiUrl, config.blockfrostProjectId);
-  } else {
+  // Emulator mode short-circuits the Blockfrost HTTP tip lookup: the
+  // emulator's slot clock starts at 0-ish (system unix-time wall clock
+  // mapped onto its local block height), and hitting Blockfrost would
+  // return the real Preview tip (millions of slots ahead), producing
+  // tx validity bounds that the emulator immediately rejects.
+  if (isEmulatorModeActive()) {
     slot = lucid.currentSlot();
+    network = lucid.config().network ?? "Preview";
+  } else {
+    const config = getCliConfig();
+    if (config.cardanoProvider === "Blockfrost") {
+      slot = await fetchBlockfrostTipSlot(config.blockfrostApiUrl, config.blockfrostProjectId);
+    } else {
+      slot = lucid.currentSlot();
+    }
+    network = lucid.config().network ?? config.cardanoNetwork;
   }
 
-  const network = lucid.config().network ?? config.cardanoNetwork;
   const unixTimeMs = Number(slotToUnixTime(network, slot));
 
   return {
@@ -51,7 +63,9 @@ export function slotBackoffUnixTimeMs(
   slot: number,
   slotsBack: number = TX_VALIDITY_START_BACK_SLOTS,
 ): number {
-  const network = lucid.config().network ?? getCliConfig().cardanoNetwork;
+  const network = lucid.config().network ?? (
+    isEmulatorModeActive() ? "Preview" : getCliConfig().cardanoNetwork
+  );
   const safeSlot = Math.max(0, slot - slotsBack);
   return Number(slotToUnixTime(network, safeSlot));
 }

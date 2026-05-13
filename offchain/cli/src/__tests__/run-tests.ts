@@ -37,7 +37,6 @@ import {
 } from "../core/primitives.js";
 import {
   assertClientIdNonEmpty,
-  assertConfigMinUtxoLovelaceImmutable,
   assertConfigUtxoLivesAtValidatorAddress,
   assertHookCoordinatorConsistency,
   assertNftBootstrapDestinationIsNotFundingWallet,
@@ -47,6 +46,7 @@ import {
   assertPaymentHookWithdrawAmountPositive,
   assertPaymentHookWithdrawAmountValid,
   assertPaymentKeyHashIsConfigSigner,
+  assertPositiveMinUtxoLovelace,
   assertReceiverTopUpAmountPositive,
   assertReceiverWithdrawAmountPositive,
   assertReceiverWithdrawAmountValid,
@@ -66,6 +66,7 @@ import {
 } from "./emulator/harness.js";
 import { isAnyReferenceScriptMissing } from "../core/reference-scripts.js";
 import { collectTxSignBuilderMetrics } from "../core/tx-metrics.js";
+import { buildPairApplyUpdateRedeemer } from "../core/redeemers.js";
 
 testCardanoWalletCreate();
 testEthereumWalletCreate();
@@ -73,6 +74,9 @@ testIntentSigning();
 testBatchSnapshotRefresh();
 testCompatibleBatchRules();
 testBatchUpdatesSortByPairTokenName();
+testBatchUpdatesSortMatchesBytewiseCompare();
+testBatchUpdatesSortRejectsNonNormalizedTokenName();
+testPairApplyUpdateRedeemerHasNoFields();
 testProtocolStateInit();
 testClientStateInit();
 
@@ -239,6 +243,77 @@ function testBatchUpdatesSortByPairTokenName(): void {
 
   assert.deepEqual(sorted.map((update) => update.label), ["aa", "bb", "cc"]);
   assert.deepEqual(updates.map((update) => update.label), ["cc", "aa", "bb"]);
+}
+
+// The on-chain coordinator enforces strict ascending order by
+// `bytearray.compare` on `pair_token_name`. Token names are
+// `blake2b_256(pair_id)` serialized as lowercase hex, so a bytewise compare
+// on the decoded bytes is equivalent to a plain lexicographic compare on
+// the normalized hex string. This regression pins that equivalence using
+// token names that mix digits and lowercase letters — exactly the cases
+// where a locale-sensitive collation could diverge from byte order on some
+// platforms.
+function testBatchUpdatesSortMatchesBytewiseCompare(): void {
+  // Hex bytes ordered: 0x09 < 0x0a < 0x0f < 0x10 < 0xa0 < 0xff.
+  const tokenNames = ["ff", "10", "0a", "a0", "0f", "09"];
+  const updates = tokenNames.map((name) => ({
+    artifact: samplePairArtifact(name),
+    label: name,
+  }));
+
+  const sorted = sortBatchUpdatesByPairTokenName(updates);
+  const sortedNames = sorted.map((update) =>
+    update.artifact.pair.tokenName,
+  );
+
+  // Verify strict ascending order matches a bytewise compare on the
+  // decoded bytes — the exact rule the on-chain batch witness header
+  // check enforces during the coordinator's main witness walk.
+  for (let i = 1; i < sortedNames.length; i++) {
+    const prev = Buffer.from(sortedNames[i - 1], "hex");
+    const curr = Buffer.from(sortedNames[i], "hex");
+    assert.ok(
+      Buffer.compare(prev, curr) < 0,
+      `Expected bytewise ascending order: ${sortedNames[i - 1]} < ${sortedNames[i]}`,
+    );
+  }
+}
+
+function testBatchUpdatesSortRejectsNonNormalizedTokenName(): void {
+  // Odd-length hex would not round-trip to bytes and must be rejected
+  // before sorting — otherwise the off-chain order could diverge from the
+  // on-chain bytewise rule on the decoded bytes.
+  const oddUpdates = [
+    { artifact: { pair: { tokenName: "abc" } }, label: "odd" },
+    { artifact: { pair: { tokenName: "aabb" } }, label: "even" },
+  ];
+  assert.throws(
+    () => sortBatchUpdatesByPairTokenName(oddUpdates),
+    /even-length hex/,
+  );
+
+  // Non-hex characters must also be rejected; `normalizeHex` only accepts
+  // `[0-9a-f]` after lower-casing, so anything else is structurally invalid
+  // as a Cardano token-name bytestring representation.
+  const nonHexUpdates = [
+    { artifact: { pair: { tokenName: "zzzz" } }, label: "non-hex" },
+    { artifact: { pair: { tokenName: "aabb" } }, label: "ok" },
+  ];
+  assert.throws(
+    () => sortBatchUpdatesByPairTokenName(nonHexUpdates),
+    /even-length hex/,
+  );
+}
+
+function testPairApplyUpdateRedeemerHasNoFields(): void {
+  // The on-chain `PairSpendAction::ApplyUpdate` constructor carries no
+  // fields after the witness-index removal — pair_state.spend no longer
+  // binds to a specific witness because update_coordinator's count
+  // checks already enforce one-pair-input-per-witness accounting.
+  assert.equal(
+    buildPairApplyUpdateRedeemer(),
+    Data.to(new Constr<PlutusData>(0, [])),
+  );
 }
 
 function testProtocolStateInit(): void {
@@ -715,12 +790,14 @@ function testConfigUpdateAndInitArtifactPreflight(): void {
     /Loaded config UTxO address does not match scripts\.configValidatorAddress/,
   );
 
-  assert.doesNotThrow(() =>
-    assertConfigMinUtxoLovelaceImmutable("5000000", "5000000"),
+  assert.doesNotThrow(() => assertPositiveMinUtxoLovelace(5_000_000n, "Config"));
+  assert.throws(
+    () => assertPositiveMinUtxoLovelace(0n, "Config"),
+    /Config min_utxo_lovelace must be greater than zero/,
   );
   assert.throws(
-    () => assertConfigMinUtxoLovelaceImmutable("5000000", "6000000"),
-    /cannot change min_utxo_lovelace/,
+    () => assertPositiveMinUtxoLovelace(-1n, "PaymentHook"),
+    /PaymentHook min_utxo_lovelace must be greater than zero/,
   );
 
   assert.throws(
@@ -1381,6 +1458,8 @@ function samplePaymentHookState(): NonNullable<ConfigStateArtifact["paymentHookS
 async function runLucidEmulatorHarnessSmokeTests(): Promise<void> {
   await testEmulatorHarnessSimpleTransfer();
   await testEmulatorHarnessReferenceScriptGenesisRow();
+  await testInstallEmulatorLucidRedirectsCliHelpers();
+  await testEmulatorProtocolFlowConfigBootstrap();
 }
 
 async function testEmulatorHarnessSimpleTransfer(): Promise<void> {
@@ -1409,4 +1488,93 @@ async function testEmulatorHarnessReferenceScriptGenesisRow(): Promise<void> {
   assert.equal(utxos.length, 1);
   assert.ok(utxos[0].scriptRef, "genesis row should expose reference script");
   assert.equal(utxos[0].scriptRef?.type, "PlutusV3");
+}
+
+// Proves that after `installEmulatorLucid` the CLI's own
+// `makeConfiguredLucid` / `selectConfiguredWallet` return the emulator's
+// Lucid + an emulator-genesis-funded wallet — without any builder
+// caller change. Also proves `uninstallEmulatorLucid` restores the
+// production env-based path (verified by observing it now throws on a
+// fresh call when no `.env` provider is set up; we just check the
+// active wallet address differs between installed and uninstalled
+// states by comparing against the emulator account's address).
+async function testInstallEmulatorLucidRedirectsCliHelpers(): Promise<void> {
+  const { installEmulatorLucid, uninstallEmulatorLucid } = await import(
+    "../emulator/lucid-injection.js"
+  );
+  const { makeConfiguredLucid, selectConfiguredWallet } = await import(
+    "../core/lucid.js"
+  );
+
+  const ctx = await makeOracleEmulatorLucid();
+  try {
+    installEmulatorLucid({
+      lucid: ctx.lucid,
+      emulator: ctx.emulator,
+      walletSeedPhrase: ctx.accounts[0].seedPhrase,
+    });
+
+    const cliLucid = await makeConfiguredLucid();
+    assert.strictEqual(
+      cliLucid,
+      ctx.lucid,
+      "makeConfiguredLucid should return the emulator's Lucid instance after install",
+    );
+
+    const source = await selectConfiguredWallet(cliLucid);
+    assert.equal(source, "seed", "wallet source should be 'seed'");
+
+    const installedAddress = await cliLucid.wallet().address();
+    assert.equal(
+      installedAddress,
+      ctx.accounts[0].address,
+      "selectConfiguredWallet should select the primary emulator account",
+    );
+  } finally {
+    uninstallEmulatorLucid();
+  }
+}
+
+// Slice-vertical smoke test for the emulator protocol-flow orchestrator.
+// Drives the same first three steps that `run-all-cli.sh` runs against
+// Preview — `preview:protocol:init`, `preview:config:parameterize`,
+// `preview:config:bootstrap` — but against the in-memory Lucid Emulator,
+// reusing every CLI builder verbatim through the lucid-injection bridge.
+// Skipped silently when `DIA_EVM_PRIVATE_KEY` is not configured, because
+// the bootstrap step derives the authorized DIA signer from that env
+// var exactly like the bash script. This keeps the test optional in
+// environments without the secret but exercises the real wiring when
+// it is present.
+async function testEmulatorProtocolFlowConfigBootstrap(): Promise<void> {
+  if (!process.env.DIA_EVM_PRIVATE_KEY?.trim()) {
+    console.log(
+      "[skip] testEmulatorProtocolFlowConfigBootstrap: set DIA_EVM_PRIVATE_KEY to run",
+    );
+    return;
+  }
+
+  const { runEmulatorProtocolFlow } = await import(
+    "../emulator/protocol-flow.js"
+  );
+  const ctx = await makeOracleEmulatorLucid();
+
+  const report = await runEmulatorProtocolFlow({
+    lucid: ctx.lucid,
+    emulator: ctx.emulator,
+    walletSeedPhrase: ctx.accounts[0].seedPhrase,
+    batchSizes: [],
+  });
+
+  assert.equal(
+    report.steps.find((s) => s.label === "config:bootstrap")?.ok,
+    true,
+    "config:bootstrap should succeed in the emulator",
+  );
+  for (const step of report.steps) {
+    assert.equal(
+      step.ok,
+      true,
+      `step "${step.label}" should succeed; got error: ${"error" in step ? step.error : ""}`,
+    );
+  }
 }

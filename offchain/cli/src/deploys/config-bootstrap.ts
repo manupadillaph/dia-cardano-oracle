@@ -38,6 +38,7 @@ import {
   waitForWalletSettlement,
 } from "../core/chain-helpers.js";
 import { assertNftBootstrapDestinationIsNotFundingWallet } from "../preflight/bootstrap-pay.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 type ResolvedConfigBootstrapInput = {
   configAssetName: string;
@@ -314,6 +315,9 @@ function resolveConfigBootstrapInput(
     );
   }
 
+  const resolvedMinUtxoLovelace = toBigInt(minUtxoLovelace, "minUtxoLovelace");
+  assertPositiveMinUtxoLovelace(resolvedMinUtxoLovelace, "Config");
+
   return {
     configAssetName,
     validConfigSigners,
@@ -330,7 +334,7 @@ function resolveConfigBootstrapInput(
     baseFeeLovelace: toBigInt(baseFeeLovelace, "baseFeeLovelace"),
     perPairFeeLovelace: toBigInt(perPairFeeLovelace, "perPairFeeLovelace"),
     maxBootstrapDriftSeconds: toBigInt(maxBootstrapDriftSeconds, "maxBootstrapDriftSeconds"),
-    minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace"),
+    minUtxoLovelace: resolvedMinUtxoLovelace,
   };
 }
 

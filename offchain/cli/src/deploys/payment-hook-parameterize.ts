@@ -22,6 +22,7 @@ import {
   toBigInt,
 } from "../core/chain-helpers.js";
 import { normalizeHex } from "../core/dia-intent.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 export async function parameterizePaymentHookScripts(args: {
   statePath?: string;
@@ -77,9 +78,14 @@ export async function parameterizePaymentHookScripts(args: {
     configAssetName,
     coordinatorCredentialHash: state.scripts.coordinatorHash,
   });
+  const paymentHookMinUtxoLovelace = toBigInt(
+    resolvedInput.minUtxoLovelace,
+    "minUtxoLovelace",
+  );
+  assertPositiveMinUtxoLovelace(paymentHookMinUtxoLovelace, "PaymentHook");
   const paymentHookState = {
     withdrawAddress: resolvedInput.withdrawAddress,
-    minUtxoLovelace: toBigInt(resolvedInput.minUtxoLovelace, "minUtxoLovelace").toString(),
+    minUtxoLovelace: paymentHookMinUtxoLovelace.toString(),
     accruedFeesLovelace: "0",
     lifetimeCollectedLovelace: "0",
     lifetimeWithdrawnLovelace: "0",
@@ -151,10 +157,13 @@ function resolvePaymentHookParameterizeInput(
     );
   }
 
+  const resolvedMinUtxoLovelace = toBigInt(minUtxoLovelace, "minUtxoLovelace");
+  assertPositiveMinUtxoLovelace(resolvedMinUtxoLovelace, "PaymentHook");
+
   return {
     paymentHookAssetLabel: defaults?.paymentHookAssetLabel,
     paymentHookAssetName: normalizeHex(paymentHookAssetName, "paymentHookAssetName"),
     withdrawAddress,
-    minUtxoLovelace: toBigInt(minUtxoLovelace, "minUtxoLovelace").toString(),
+    minUtxoLovelace: resolvedMinUtxoLovelace.toString(),
   };
 }

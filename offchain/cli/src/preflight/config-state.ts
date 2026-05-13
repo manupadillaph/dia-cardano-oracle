@@ -44,15 +44,12 @@ export function assertPaymentKeyHashIsConfigSigner(
   }
 }
 
-/** `admin_update_transition` fixes `min_utxo_lovelace`; off-chain merge must not drift. */
-export function assertConfigMinUtxoLovelaceImmutable(
-  previousMinUtxo: string,
-  nextMinUtxo: string,
+export function assertPositiveMinUtxoLovelace(
+  minUtxoLovelace: bigint,
+  label: string,
 ): void {
-  if (previousMinUtxo !== nextMinUtxo) {
-    throw new Error(
-      "Config update cannot change min_utxo_lovelace; it is fixed by on-chain admin_update_transition.",
-    );
+  if (minUtxoLovelace <= 0n) {
+    throw new Error(`${label} min_utxo_lovelace must be greater than zero lovelace.`);
   }
 }
 

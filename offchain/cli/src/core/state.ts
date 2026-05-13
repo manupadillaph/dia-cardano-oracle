@@ -1,7 +1,32 @@
-import { access, readFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DiaOracleIntentInput } from "./dia-intent.js";
+
+// JSON serializer for state artifacts. Handles `bigint` by emitting the
+// decimal representation; matches the format the CLI's `writeJsonOutput`
+// in `src/index.ts` produces, so files written via this helper are
+// interchangeable with files written by the CLI entry point.
+export async function writeStateJsonFile(
+  outPath: string,
+  value: unknown,
+): Promise<string> {
+  const resolvedPath = path.resolve(outPath);
+  await mkdir(path.dirname(resolvedPath), { recursive: true });
+  await writeFile(
+    resolvedPath,
+    JSON.stringify(
+      value,
+      (_key, currentValue) =>
+        typeof currentValue === "bigint"
+          ? currentValue.toString()
+          : currentValue,
+      2,
+    ) + "\n",
+    "utf8",
+  );
+  return resolvedPath;
+}
 
 export type PairEntryState = {
   tokenName: string;

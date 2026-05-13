@@ -107,7 +107,7 @@ export async function pairUpdateMinUtxo(args: {
   // Build the UpdateMinUtxo redeemer
   // PairSpendAction::UpdateMinUtxo { new_min_utxo_lovelace: Int }
   const updateMinUtxoRedeemer = Data.to(
-    new Constr(1, [newMinUtxo]) // Index 1 = UpdateMinUtxo (after ApplyUpdate at index 0)
+    new Constr(1, [newMinUtxo]) // Index 1 = UpdateMinUtxo; ApplyUpdate is index 0.
   );
 
   reportProgress("Building Preview pair update-min-utxo transaction");

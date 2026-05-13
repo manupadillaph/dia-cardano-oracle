@@ -8,7 +8,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx src/__tests__/run-tests.ts",
-    "cli": "tsx src/index.ts"
+    "cli": "tsx src/index.ts",
+    "benchmark:emulator": "tsx scripts/emulator-benchmark.ts"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.4.2",

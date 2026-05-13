@@ -8,7 +8,10 @@ import {
   parseCommaSeparatedHexList,
   utf8ToHex,
 } from "../core/dia-intent.js";
-import { assertNonEmptyConfigSignerList } from "../preflight/index.js";
+import {
+  assertNonEmptyConfigSignerList,
+  assertPositiveMinUtxoLovelace,
+} from "../preflight/index.js";
 import type { ConfigStateArtifact } from "../core/state.js";
 import {
   emptyProtocolCompiledScripts,
@@ -131,6 +134,10 @@ export function createProtocolStateArtifact(args: {
   };
 
   assertNonEmptyConfigSignerList(configState.validConfigSigners);
+  assertPositiveMinUtxoLovelace(
+    toBigInt(configState.minUtxoLovelace, "minUtxoLovelace"),
+    "Protocol",
+  );
 
   return {
     wallet: {
@@ -249,7 +256,7 @@ async function promptForProtocolConfigInput(
   const minUtxoLovelace = await promptForText({
     message: "Config min UTxO lovelace",
     defaultValue: defaults.minUtxoLovelace,
-    validate: (value) => (/^\d+$/.test(value) ? true : "Enter a non-negative integer."),
+    validate: (value) => (/^[1-9]\d*$/.test(value) ? true : "Enter a positive integer."),
   });
   const configAssetLabel = await promptForText({
     message: "Config asset label",

@@ -29,6 +29,7 @@ import {
   normalizeHex,
 } from "../core/dia-intent.js";
 import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
+import { assertPositiveMinUtxoLovelace } from "../preflight/index.js";
 
 export async function parameterizeConfigScripts(args: {
   statePath?: string;
@@ -49,6 +50,7 @@ export async function parameterizeConfigScripts(args: {
   const walletDefaults = deriveConfiguredWalletDefaults({ source, address: walletAddress });
   const resolvedInput = resolveConfigParameterizeInput(previousState, walletDefaults);
   const minUtxoLovelace = toBigInt(resolvedInput.minUtxoLovelace, "minUtxoLovelace");
+  assertPositiveMinUtxoLovelace(minUtxoLovelace, "Config");
   const selectedBootstrapUtxo = previousState?.bootstrapRefs.config.txHash
     ? findUtxoByOutRef(walletUtxos, previousState.bootstrapRefs.config, "config bootstrap")
     : selectBootstrapUtxo(walletUtxos);
