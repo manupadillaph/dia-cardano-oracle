@@ -26,7 +26,9 @@ import {
 import {
   assertOracleIntentTimestampAndNonceMonotonic,
   assertOracleUpdateBootstrapRefsResolved,
+  assertPaymentKeyHashIsConfigSigner,
 } from "../preflight/index.js";
+import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   makeConfiguredLucid,
   selectConfiguredWallet,
@@ -186,6 +188,21 @@ export async function submitBatchOracleUpdate(args: {
     wallet.address(),
     wallet.getUtxos(),
   ]);
+  const walletDefaults = deriveConfiguredWalletDefaults({ source, address: walletAddress });
+  const hasCreate = states.some(({ isCreate }) => isCreate);
+  if (hasCreate) {
+    // Any batch that includes a pair creation MUST be signed by a config
+    // admin (pair_state.mint MintPairs is admin-gated). Pure-update
+    // batches do not need this.
+    assertPaymentKeyHashIsConfigSigner(
+      walletDefaults.paymentKeyHash,
+      protocolState.configState.validConfigSigners,
+      {
+        unauthorizedMessage:
+          "Batch update includes one or more pair creations and requires the configured wallet to be a config admin (config_admins). The current wallet is not authorized.",
+      },
+    );
+  }
   const { utxos: referenceScriptUtxos, missing: missingReferenceScripts } =
     await loadReferenceScriptUtxos(
       [
@@ -425,7 +442,12 @@ export async function submitBatchOracleUpdate(args: {
     }
   }
   if (Object.keys(mintAssets).length > 0) {
-    txBuilder = txBuilder.mintAssets(mintAssets, Data.to(new Constr<PlutusData>(0, [])));
+    // Admin signer is required by `pair_state.mint(MintPairs)` for any
+    // batch that creates one or more pairs (anti-replay gate on signed
+    // DIA intents — see security notes).
+    txBuilder = txBuilder
+      .mintAssets(mintAssets, Data.to(new Constr<PlutusData>(0, [])))
+      .addSignerKey(walletDefaults.paymentKeyHash);
     if (missingReferenceScripts.pairMint) {
       reportProgress("Reference script for pairMint is missing on-chain; attaching the pair minting policy inline.");
       txBuilder = txBuilder.attach.MintingPolicy(pairMintPolicy);

@@ -2,13 +2,22 @@
 // DIA Oracle — emulator protocol-flow benchmark.
 //
 // Runs the same end-to-end protocol flow as
-// `offchain/cli/scripts/run-all-cli.sh` — protocol bootstrap, payment-
-// hook bootstrap, receiver bootstrap, 11 single-pair updates,
-// batch-N attempts (descending until one succeeds), settle,
-// withdraws, reclaim, republish — but against the in-memory Lucid
-// Emulator. Captures Plutus exec-units (CPU + memory) and fees per
-// transaction, then writes a Markdown + JSON report under
-// `docs/milestones/evidence/m1-emulator-benchmark-<run-id>/`.
+// `offchain/cli/scripts/run-all-cli.sh` against the in-memory Lucid
+// Emulator. Two modes:
+//
+//   - **probe (default)**: walks batch sizes ascending. For each N, the
+//     orchestrator creates pair N (single update) and then runs batch-N
+//     over all N created pairs. It keeps going until a batch fails;
+//     the last successful N is the "max batch" the current bytecode
+//     can fit. Reports every attempt with exec-units + fee.
+//   - **single-shot (`--batch-size N`)**: seeds exactly N pairs via
+//     single updates, then runs one batch-N. No probe up. Useful when
+//     you already know the target size and just want fresh numbers
+//     for it.
+//
+// In both modes the run finishes with settle → withdraws → reclaim →
+// republish → admin-gated pair burn, and writes a Markdown + JSON
+// report under `docs/milestones/evidence/m1-emulator-benchmark-<run-id>/`.
 //
 // Prerequisites:
 //   - `DIA_EVM_PRIVATE_KEY` set in `.env` (same env var as the bash
@@ -17,7 +26,7 @@
 //
 // Usage:
 //   npm run benchmark:emulator
-//   npm run benchmark:emulator -- --batch-sizes 10,9,8,7,6,5
+//   npm run benchmark:emulator -- --batch-size 12
 //   npm run benchmark:emulator -- --keep-work-dir
 
 import path from "node:path";
@@ -31,19 +40,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(here, "..", "..", "..");
 
 type Args = {
-  batchSizes: number[];
+  batchSize: number | undefined;
   keepWorkDir: boolean;
 };
 
 function parseArgs(argv: string[]): Args {
-  const out: Args = { batchSizes: [10, 9, 8, 7, 6, 5], keepWorkDir: false };
+  const out: Args = { batchSize: undefined, keepWorkDir: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--batch-sizes") {
-      const v = argv[++i] ?? "";
-      out.batchSizes = parseBatchSizes(v);
-    } else if (arg.startsWith("--batch-sizes=")) {
-      out.batchSizes = parseBatchSizes(arg.slice("--batch-sizes=".length));
+    if (arg === "--batch-size") {
+      out.batchSize = parseBatchSize(argv[++i] ?? "");
+    } else if (arg.startsWith("--batch-size=")) {
+      out.batchSize = parseBatchSize(arg.slice("--batch-size=".length));
     } else if (arg === "--keep-work-dir") {
       out.keepWorkDir = true;
     } else if (arg === "--help" || arg === "-h") {
@@ -58,14 +66,12 @@ function parseArgs(argv: string[]): Args {
   return out;
 }
 
-function parseBatchSizes(value: string): number[] {
-  const parts = value.split(",").map((s) => Number(s.trim()));
-  for (const n of parts) {
-    if (!Number.isFinite(n) || n < 1 || n > 10) {
-      throw new Error(`Invalid batch size: ${n}. Must be an integer 1..10.`);
-    }
+function parseBatchSize(value: string): number {
+  const n = Number(value.trim());
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error(`Invalid --batch-size: ${value}. Must be a positive integer.`);
   }
-  return parts;
+  return n;
 }
 
 function printUsage(): void {
@@ -74,11 +80,18 @@ DIA Oracle — emulator protocol-flow benchmark.
 
 Usage:
   npm run benchmark:emulator
-  npm run benchmark:emulator -- [--batch-sizes 10,9,8,7,6,5] [--keep-work-dir]
+  npm run benchmark:emulator -- [--batch-size N] [--keep-work-dir]
+
+Modes:
+  (no flag)              Probe mode. Walks N = 1, 2, 3, … For each N the
+                         orchestrator creates pair N (single update) and
+                         then runs batch-N over all N created pairs.
+                         Stops at the first batch that fails; the last
+                         successful N is the report's max.
+  --batch-size N         Single-shot mode. Seeds exactly N pairs via
+                         single updates, then runs one batch-N. No probe.
 
 Options:
-  --batch-sizes <list>   Comma-separated descending batch sizes to attempt.
-                         Default: 10,9,8,7,6,5. Stops at the first success.
   --keep-work-dir        Keep the temporary state working dir on exit.
                          Useful for inspecting state JSON files after a
                          failed run. Default: cleaned up.
@@ -113,7 +126,11 @@ async function main(): Promise<void> {
   );
 
   console.error(`[benchmark:emulator] run id: ${runId}`);
-  console.error(`[benchmark:emulator] batch sizes (descending): ${args.batchSizes.join(", ")}`);
+  console.error(
+    `[benchmark:emulator] mode: ${
+      args.batchSize === undefined ? "probe (ascending, stop at first failure)" : `single-shot batch-${args.batchSize}`
+    }`,
+  );
   console.error(`[benchmark:emulator] evidence dir: ${evidenceDir}`);
 
   console.error("[benchmark:emulator] booting Lucid Emulator");
@@ -125,7 +142,7 @@ async function main(): Promise<void> {
     emulator: ctx.emulator,
     walletSeedPhrase: ctx.accounts[0].seedPhrase,
     keepWorkDir: args.keepWorkDir,
-    batchSizes: args.batchSizes,
+    batchSize: args.batchSize,
     reportProgress: (message) => console.error(message),
   });
   const elapsedMs = Date.now() - startedAt;
@@ -144,8 +161,9 @@ async function main(): Promise<void> {
   }
 
   // Print a compact batch-attempt summary to stdout so CI logs make it
-  // obvious which sizes fit on the current bytecode.
-  console.log("\nBatch attempts (descending):");
+  // obvious which sizes fit on the current bytecode. In probe mode the
+  // attempts are in ascending size; in single-shot mode there's exactly one.
+  console.log("\nBatch attempts:");
   for (const attempt of report.batchAttempts) {
     const tag = attempt.ok ? "ok  " : "FAIL";
     const cpu = attempt.metrics?.exUnits.cpu?.toString() ?? "—";

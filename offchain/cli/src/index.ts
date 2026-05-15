@@ -56,6 +56,7 @@ function printUsage(): void {
   npm run cli -- preview:receiver:withdraw --amount-lovelace 2000000 [--recipient-address <addr>] --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:receiver:update-min-utxo --new-min-utxo-lovelace 3000000 --protocol-state ./state/preview/config-bootstrap.json --state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:pair:update-min-utxo --new-min-utxo-lovelace 3000000 --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json --state ./state/preview/clients/client-a/pairs/usdc-usd.json [--build-only]
+  npm run cli -- preview:pair:burn --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json --state ./state/preview/clients/client-a/pairs/usdc-usd.json [--build-only]
   npm run cli -- preview:settle --protocol-state ./state/preview/config-bootstrap.json --client-state ./state/preview/clients/client-a.json [--build-only]
   npm run cli -- preview:payment-hook:withdraw --amount-lovelace 2000000 --state ./state/preview/config-bootstrap.json [--build-only]
   npm run cli -- preview:reclaim-reference-script --script <config|payment-hook> --state ./state/preview/config-bootstrap.json [--build-only]
@@ -698,6 +699,27 @@ async function run(): Promise<void> {
       const buildOnly = hasBuildOnlyFlag();
       const result = await pairUpdateMinUtxo({
         newMinUtxoLovelace: requireFlagValue("--new-min-utxo-lovelace"),
+        protocolStatePath: requireFlagValue("--protocol-state"),
+        clientStatePath: requireFlagValue("--client-state"),
+        pairStatePath: statePath ?? "",
+        buildOnly,
+      });
+      if (statePath && !buildOnly) {
+        await writeJsonOutput(statePath, result);
+      }
+      printJson(result);
+      return;
+    }
+
+    case "preview:pair:burn": {
+      // Admin-gated tx that burns the Pair NFT and recovers the locked
+      // min-ADA to the admin wallet. See pair-burn.ts and the security
+      // notes for the on-chain invariants this drives.
+      const { pairBurn } = await import("./transactions/pair-burn.js");
+      getCliConfig();
+      const statePath = optionalFlagValue("--state");
+      const buildOnly = hasBuildOnlyFlag();
+      const result = await pairBurn({
         protocolStatePath: requireFlagValue("--protocol-state"),
         clientStatePath: requireFlagValue("--client-state"),
         pairStatePath: statePath ?? "",

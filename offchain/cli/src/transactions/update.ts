@@ -26,7 +26,9 @@ import {
 import {
   assertOracleIntentTimestampAndNonceMonotonic,
   assertOracleUpdateBootstrapRefsResolved,
+  assertPaymentKeyHashIsConfigSigner,
 } from "../preflight/index.js";
+import { deriveConfiguredWalletDefaults } from "../wallet/wallet.js";
 import {
   makeConfiguredLucid,
   selectConfiguredWallet,
@@ -180,6 +182,19 @@ export async function submitOracleUpdate(args: {
     wallet.address(),
     wallet.getUtxos(),
   ]);
+  const walletDefaults = deriveConfiguredWalletDefaults({ source, address: walletAddress });
+  if (isCreate) {
+    // Pair creation is admin-gated on-chain (pair_state.mint MintPairs).
+    // Fail loudly here rather than producing a tx the chain will reject.
+    assertPaymentKeyHashIsConfigSigner(
+      walletDefaults.paymentKeyHash,
+      protocol.configState.validConfigSigners,
+      {
+        unauthorizedMessage:
+          "Pair creation requires the configured wallet to be a config admin (config_admins). The current wallet is not authorized.",
+      },
+    );
+  }
   const { utxos: referenceScriptUtxos, missing: missingReferenceScripts } =
     await loadReferenceScriptUtxos(
       [
@@ -384,7 +399,12 @@ export async function submitOracleUpdate(args: {
     );
 
   if (isCreate) {
-    txBuilder = txBuilder.mintAssets({ [state.pair.pairUnit]: 1n }, pairMintRedeemer);
+    // Admin signer is required by `pair_state.mint(MintPairs)`. Without
+    // it the on-chain validator rejects pair creation (anti-replay of
+    // signed DIA intents — see security notes).
+    txBuilder = txBuilder
+      .mintAssets({ [state.pair.pairUnit]: 1n }, pairMintRedeemer)
+      .addSignerKey(walletDefaults.paymentKeyHash);
     if (missingReferenceScripts.pairMint) {
       reportProgress("Reference script for pairMint is missing on-chain; attaching the pair minting policy inline.");
       txBuilder = txBuilder.attach.MintingPolicy(pairMintPolicy);

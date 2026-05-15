@@ -1558,11 +1558,15 @@ async function testEmulatorProtocolFlowConfigBootstrap(): Promise<void> {
   );
   const ctx = await makeOracleEmulatorLucid();
 
+  // `batchSize: 1` is the fastest end-to-end smoke: bootstrap → top-up →
+  // create 1 pair → batch-1 → settle → withdraws → reclaim → republish →
+  // burn. Exercises every step of the orchestrator without paying for the
+  // full probe up the catalog.
   const report = await runEmulatorProtocolFlow({
     lucid: ctx.lucid,
     emulator: ctx.emulator,
     walletSeedPhrase: ctx.accounts[0].seedPhrase,
-    batchSizes: [],
+    batchSize: 1,
   });
 
   assert.equal(

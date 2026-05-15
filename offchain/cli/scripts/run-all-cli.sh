@@ -73,8 +73,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$FROM_STEP" =~ ^[0-9]+$ ]] || (( FROM_STEP < 1 || FROM_STEP > 30 )); then
-  echo "--from-step must be an integer between 1 and 30" >&2
+if ! [[ "$FROM_STEP" =~ ^[0-9]+$ ]] || (( FROM_STEP < 1 || FROM_STEP > 31 )); then
+  echo "--from-step must be an integer between 1 and 31" >&2
   exit 1
 fi
 
@@ -651,7 +651,20 @@ if should_run_step 30; then
     "preview:payment-hook:reference-script --state $STATE_REL/config-bootstrap.json"
 fi
 
-STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-summary-build.log" 2>&1
+# Step 31: admin-gated burn of one Pair NFT. Pairs DOT/USD on purpose because
+# it's the last pair created during bootstrap, so retiring it does not disrupt
+# the runbook's primary example (USDC/USD / BTC/USD). The single tx fires:
+#   - pair_state.spend.BurnPair   (consumes the Pair UTxO, no continuation)
+#   - pair_state.mint.BurnPairs   (burns the matching Pair NFT, qty -1)
+# Both validators require a config_admins signature; the bench wallet is the
+# admin, so the tx is fully gated by the same key that ran every other step.
+BURN_PAIR_SLUG="dot-usd"
+if should_run_step 31; then
+  run_tx_logged "31-pair-burn-${BURN_PAIR_SLUG}.log" \
+    "preview:pair:burn --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/${BURN_PAIR_SLUG}.json"
+fi
+
+STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" BURN_PAIR_SLUG="$BURN_PAIR_SLUG" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-summary-build.log" 2>&1
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -659,6 +672,7 @@ const stateRoot = process.env.STATE_ROOT;
 const evidenceRoot = process.env.EVIDENCE_ROOT;
 const successBatchSize = process.env.SUCCESS_BATCH_SIZE;
 const clientId = process.env.CLIENT_ID;
+const burnPairSlug = process.env.BURN_PAIR_SLUG ?? "";
 if (!stateRoot || !evidenceRoot || !successBatchSize || !clientId) {
   throw new Error("Missing summary build environment variables.");
 }
@@ -668,14 +682,29 @@ const client = JSON.parse(await readFile(path.join(stateRoot, "clients", `${clie
 const pairsDir = path.join(stateRoot, "clients", clientId, "pairs");
 const pairFiles = (await readdir(pairsDir)).filter((name) => name.endsWith(".json")).sort();
 const pairs = {};
+// Pair burn keeps `pairState` populated for audit (only `datum.pairCbor` is
+// cleared by pair-burn.ts), so we detect a burn by looking for a
+// `preview:pair:burn` entry in the pair's transactions log. Downstream math
+// (locked-ADA totals, evidence markdown) MUST exclude burned pairs.
+let burnedCount = 0;
 for (const fileName of pairFiles) {
-  pairs[fileName] = JSON.parse(await readFile(path.join(pairsDir, fileName), "utf8"));
+  const pair = JSON.parse(await readFile(path.join(pairsDir, fileName), "utf8"));
+  const txs = pair.transactions ?? [];
+  const burnRec = txs.find((t) => t && t.step === "preview:pair:burn");
+  if (burnRec) {
+    burnedCount += 1;
+    pair.burned = true;
+    pair.burnTxHash = burnRec.submittedTxHash ?? null;
+  }
+  pairs[fileName] = pair;
 }
 
 const summary = {
   generatedAt: new Date().toISOString(),
   stateRoot,
   successBatchSize: Number(successBatchSize),
+  burnPairSlug: burnPairSlug || null,
+  burnedPairCount: burnedCount,
   protocolTransactions: protocol.transactions ?? [],
   clientTransactions: client.transactions ?? [],
   scripts: protocol.scripts,
@@ -694,14 +723,14 @@ await writeFile(
   JSON.stringify(summary, null, 2) + "\n",
   "utf8",
 );
-console.log(`wrote SUMMARY.json with ${pairFiles.length} pair states`);
+console.log(`wrote SUMMARY.json with ${pairFiles.length} pair states (${burnedCount} burned)`);
 NODE
 
 # Capture final wallet balance after all transactions
 capture_cli_json "30a-wallet-final.json" preview:wallet:utxos
 
 # Generate the full evidence markdown from all collected data
-STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" RUN_ID="$RUN_ID" EVIDENCE_NAME="$EVIDENCE_NAME" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-evidence-build.log" 2>&1
+STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" RUN_ID="$RUN_ID" EVIDENCE_NAME="$EVIDENCE_NAME" BURN_PAIR_SLUG="$BURN_PAIR_SLUG" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-evidence-build.log" 2>&1
 import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -711,9 +740,13 @@ const successBatchSize = Number(process.env.SUCCESS_BATCH_SIZE);
 const clientId    = process.env.CLIENT_ID;
 const runId       = process.env.RUN_ID;
 const evidenceName = process.env.EVIDENCE_NAME;
+const burnPairSlug = process.env.BURN_PAIR_SLUG ?? "";
 if (!stateRoot || !evidenceRoot || !clientId || !runId || !evidenceName) {
   throw new Error("Missing evidence build environment variables.");
 }
+const burnSymbolLabel = burnPairSlug
+  ? burnPairSlug.toUpperCase().replace(/-/g, "/")
+  : "";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -827,6 +860,13 @@ const STEPS = [
   { log: "28-payment-hook-withdraw.log",                label: "`preview:payment-hook:withdraw`",                     tx: true },
   { log: "29-reclaim-payment-hook-reference-script.log",label: "`preview:reclaim-reference-script --script payment-hook`", tx: true },
   { log: "30-republish-payment-hook-reference-script.log",label: "`preview:payment-hook:reference-script` (republish)", tx: true },
+  ...(burnPairSlug
+    ? [{
+        log:   `31-pair-burn-${burnPairSlug}.log`,
+        label: `\`preview:pair:burn\` — ${burnSymbolLabel} burn (admin-gated)`,
+        tx:    true,
+      }]
+    : []),
 ];
 
 // Batch attempts that were not submitted
@@ -881,8 +921,17 @@ const receiverLockedLovelace = receiverState
     BigInt(receiverState.balanceLovelace ?? 0) +
     BigInt(receiverState.accruedToHookLovelace ?? 0)
   : 0n;
+// Burned pairs no longer lock min-ADA on-chain even though their state file
+// keeps `pairState` populated for audit (pair-burn.ts clears `datum.pairCbor`
+// only). Skip them so the reconciliation initial = final + fees + locked stays
+// accurate. Detection mirrors the SUMMARY.json builder above.
+const isPairBurned = (p) =>
+  (p?.transactions ?? []).some((t) => t && t.step === "preview:pair:burn");
+const burnedPairCount = Object.values(pairs).filter(isPairBurned).length;
+const livePairCount   = Object.values(pairs).length - burnedPairCount;
 const pairLockedLovelace = Object.values(pairs).reduce(
-  (s, p) => s + BigInt(p.pairState?.minUtxoLovelace ?? 0), 0n,
+  (s, p) => (isPairBurned(p) ? s : s + BigInt(p.pairState?.minUtxoLovelace ?? 0)),
+  0n,
 );
 const totalStateLockedLovelace =
   configLockedLovelace + hookLockedLovelace + receiverLockedLovelace + pairLockedLovelace;
@@ -1120,7 +1169,7 @@ Single wallet used for all operations (DIA admin = updater = funder).
 | Config UTxO (min-UTxO) | ${lovelaceToAda(configLockedLovelace)} ADA |
 | PaymentHook UTxO (min-UTxO + accrued) | ${lovelaceToAda(hookLockedLovelace)} ADA |
 | Receiver UTxO (min-UTxO + balance + accrued) | ${lovelaceToAda(receiverLockedLovelace)} ADA |
-| Pair UTxOs × ${pairFiles.length} (min-UTxO each) | ${lovelaceToAda(pairLockedLovelace)} ADA |
+| Pair UTxOs × ${livePairCount} (min-UTxO each${burnedPairCount > 0 ? `; ${burnedPairCount} burned excluded` : ""}) | ${lovelaceToAda(pairLockedLovelace)} ADA |
 | Reference-script UTxOs × 6 (config+coordinator+hook+receiver+pair+pairMint) | ${lovelaceToAda(totalRefScriptLockedLovelace)} ADA |
 | **Total locked in protocol** | **${lovelaceToAda(totalLockedLovelace)} ADA** |
 

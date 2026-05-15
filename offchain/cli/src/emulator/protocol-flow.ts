@@ -14,7 +14,7 @@
 // `src/index.ts` does at the CLI command layer, so the emulator
 // orchestrator works without any builder-signature changes.
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,29 +33,43 @@ import { getNetworkNow } from "../core/network-time.js";
 
 const CLIENT_ID = "client-a";
 const DOMAIN_NAME = "DIA Oracle";
-const RECEIVER_TOP_UP_1_LOVELACE = "30000000";
-const RECEIVER_TOP_UP_2_LOVELACE = "30000000";
+// Single, generous top-up. Sized to cover up to PAIR_CATALOG.length (20)
+// probe iterations: each iteration is one create (`base + per_pair`) plus one
+// batch-N (`base + N*per_pair`). With base=0.6 / per_pair=0.4, the worst-case
+// probe burn is ~136 ADA; 200 ADA leaves room for the final withdraw step.
+const RECEIVER_TOP_UP_LOVELACE = "200000000";
 const RECEIVER_WITHDRAW_LOVELACE = "5000000";
 const PAYMENT_HOOK_WITHDRAW_LOVELACE = "10000000";
 
-// Same pairs and prices as `run-all-cli.sh`. The 11-pair bootstrap covers
-// USDC/USD first (the receiver-bootstrap pair) and then 10 batch-eligible
-// pairs (btc-usd through dot-usd) that the batch tests draw from.
-const PAIR_CATALOG = [
-  { slug: "usdc-usd",  symbol: "USDC/USD",  bootstrapPrice: "100045678",     batchPrice: null              },
-  { slug: "btc-usd",   symbol: "BTC/USD",   bootstrapPrice: "6000000000000", batchPrice: "6001000000000"  },
-  { slug: "eth-usd",   symbol: "ETH/USD",   bootstrapPrice: "250000000000",  batchPrice: "250100000000"   },
-  { slug: "ada-usd",   symbol: "ADA/USD",   bootstrapPrice: "750000000",     batchPrice: "751000000"      },
-  { slug: "usdt-usd",  symbol: "USDT/USD",  bootstrapPrice: "100001234",     batchPrice: "100101234"      },
-  { slug: "dai-usd",   symbol: "DAI/USD",   bootstrapPrice: "100000345",     batchPrice: "100100345"      },
-  { slug: "sol-usd",   symbol: "SOL/USD",   bootstrapPrice: "18500000000",   batchPrice: "18510000000"    },
-  { slug: "bnb-usd",   symbol: "BNB/USD",   bootstrapPrice: "61500000000",   batchPrice: "61510000000"    },
-  { slug: "xrp-usd",   symbol: "XRP/USD",   bootstrapPrice: "520000000",     batchPrice: "521000000"      },
-  { slug: "matic-usd", symbol: "MATIC/USD", bootstrapPrice: "980000000",     batchPrice: "981000000"      },
-  { slug: "dot-usd",   symbol: "DOT/USD",   bootstrapPrice: "420000000",     batchPrice: "421000000"      },
-] as const;
+// The probe doesn't use a hardcoded pair list. Each iteration mints a fresh
+// pair `pair-N` on the fly: the slug and symbol come from the counter, and
+// prices are derived numerically so every intent is unique. The probe keeps
+// going until a batch tx fails (over-budget exec-units, validator
+// rejection, …) or — as a defensive guard — until `PROBE_SAFETY_CAP` is hit.
+// The cap is set generously above any plausible Plutus V3 ceiling so a
+// healthy run never bumps into it; it exists only so a regression in
+// failure detection cannot turn the probe into an infinite loop.
+const PROBE_SAFETY_CAP = 100;
 
-const BATCH_PAIRS = PAIR_CATALOG.slice(1); // 10 batch-eligible pairs (excludes usdc-usd)
+type ProbePair = {
+  slug: string;
+  symbol: string;
+  bootstrapPrice: string;
+  batchPrice: string;
+};
+
+function makeProbePair(index1: number): ProbePair {
+  // `index1` is 1-based ("pair-1" for the first probe iteration). Prices are
+  // separated by 1 so create→update has a strictly-greater value on each
+  // pair without colliding across pairs.
+  const base = 1_000_000n + BigInt(index1) * 1_000n;
+  return {
+    slug: `pair-${index1}`,
+    symbol: `PAIR${index1}/USD`,
+    bootstrapPrice: base.toString(),
+    batchPrice: (base + 1n).toString(),
+  };
+}
 
 export type EmulatorProtocolFlowArgs = {
   lucid: LucidInstance;
@@ -64,13 +78,14 @@ export type EmulatorProtocolFlowArgs = {
   workDir?: string;
   keepWorkDir?: boolean;
   reportProgress?: (message: string) => void;
-  // Batch sizes (in pairs) to attempt after the 11 singles complete.
-  // Each one is built with `submitBatchOracleUpdate` against a fresh
-  // manifest. The orchestrator submits in descending order (matching
-  // `run-all-cli.sh`'s strategy of trying 10/9/8/7/6/5 and stopping at
-  // the first success), but the report captures every attempt with its
-  // exec-units + outcome. Default: [10, 9, 8, 7, 6, 5].
-  batchSizes?: number[];
+  // When `undefined`, the orchestrator runs in **probe mode**: it grows the
+  // pair set by one in lockstep with the batch size, attempting batch-1 →
+  // batch-2 → … and stops at the first batch that fails. The report keeps
+  // every attempt's exec-units so callers can see the cliff.
+  // When set to N, the orchestrator runs in **single-shot mode**: it seeds
+  // exactly N pairs (via single updates) and runs one batch-N. No probe,
+  // no fallback. If batch-N fails the run reports failure for that size.
+  batchSize?: number;
 };
 
 export type EmulatorStepReport = {
@@ -113,7 +128,22 @@ export async function runEmulatorProtocolFlow(
 
   const steps: EmulatorStepReport[] = [];
   const batchAttempts: EmulatorProtocolFlowReport["batchAttempts"] = [];
-  const batchSizes = (args.batchSizes ?? [10, 9, 8, 7, 6, 5]).slice();
+  // Mode: probe (default) walks N=1,2,3,…; single-shot uses exactly N.
+  const fixedBatchSize = args.batchSize;
+  if (fixedBatchSize !== undefined) {
+    if (!Number.isInteger(fixedBatchSize) || fixedBatchSize < 1) {
+      throw new Error(`batchSize must be a positive integer (got: ${fixedBatchSize})`);
+    }
+    if (fixedBatchSize > PROBE_SAFETY_CAP) {
+      throw new Error(
+        `batchSize ${fixedBatchSize} exceeds PROBE_SAFETY_CAP (${PROBE_SAFETY_CAP}); raise the cap if you really need this size.`,
+      );
+    }
+  }
+  // Track which pairs were actually created so we can:
+  //   - generate batch intents for them (and only them) at each step;
+  //   - pick the burn target at the end of the run as the last live pair.
+  const createdPairs: ProbePair[] = [];
 
   installEmulatorLucid({
     lucid: args.lucid,
@@ -225,10 +255,10 @@ export async function runEmulatorProtocolFlow(
       await writeStateJsonFile(clientStatePath, state);
     });
 
-    await runTxStep(steps, "receiver:top-up:1", reportProgress, async () => {
+    await runTxStep(steps, "receiver:top-up", reportProgress, async () => {
       const { receiverTopUp } = await import("../transactions/receiver-top-up.js");
       const state = await receiverTopUp({
-        amountLovelace: RECEIVER_TOP_UP_1_LOVELACE,
+        amountLovelace: RECEIVER_TOP_UP_LOVELACE,
         statePath: clientStatePath,
         protocolStatePath,
         buildOnly: false,
@@ -236,11 +266,31 @@ export async function runEmulatorProtocolFlow(
       await writeStateJsonFile(clientStatePath, state);
     });
 
-    // ── 11 single oracle updates (one per pair in the catalog) ──────
-    for (const pair of PAIR_CATALOG) {
+    // ── Probe / single-shot phase ───────────────────────────────────
+    // Default (probe): walk N = 1, 2, 3, … Each iteration:
+    //   1. Generate + sign a bootstrap intent for `PAIR_CATALOG[N-1]`.
+    //   2. Run `preview:update` to create that Pair UTxO.
+    //   3. Generate fresh batch intents for ALL N created pairs (using
+    //      monotone (timestamp, nonce) so the on-chain freshness check
+    //      passes regardless of how fast the emulator runs).
+    //   4. Attempt batch-N. Record exec-units. On failure → break;
+    //      `maxBatch` is the last successful N.
+    //
+    // Single-shot (`args.batchSize = N`): pre-seed N pairs without
+    // probing in between, then run batch-N once. The pre-seed creates
+    // are recorded as `update:<slug>:seed` steps (not probed individually),
+    // and a single `update:batch:N` step captures the actual attempt.
+    const ceilingForProbe = fixedBatchSize ?? PROBE_SAFETY_CAP;
+    let maxBatch = 0;
+    let probeFailedAt: number | null = null;
+
+    for (let i = 0; i < ceilingForProbe; i++) {
+      const pair = makeProbePair(i + 1);
+      const size = i + 1;
       const intentPath = path.join(intentsDir, `${pair.slug}.signed.json`);
       const pairStatePath = path.join(pairsDir, `${pair.slug}.json`);
 
+      // (1) bootstrap intent → (2) create the pair
       await runStep(steps, `intent:create-and-sign:${pair.slug}`, reportProgress, async () => {
         const { createAndSignPreviewOracleIntent } = await import(
           "../oracle/intent-create.js"
@@ -266,62 +316,51 @@ export async function runEmulatorProtocolFlow(
         });
         await writeStateJsonFile(pairStatePath, state);
       });
-    }
+      createdPairs.push(pair);
 
-    // ── Second top-up before the batch attempts ────────────────────
-    await runTxStep(steps, "receiver:top-up:2", reportProgress, async () => {
-      const { receiverTopUp } = await import("../transactions/receiver-top-up.js");
-      const state = await receiverTopUp({
-        amountLovelace: RECEIVER_TOP_UP_2_LOVELACE,
-        statePath: clientStatePath,
-        protocolStatePath,
-        buildOnly: false,
-      });
-      await writeStateJsonFile(clientStatePath, state);
-    });
+      // In single-shot mode we only run batch-N at the very end, not at
+      // every intermediate size — those creates are "seeding".
+      const runBatchHere = fixedBatchSize === undefined || size === fixedBatchSize;
+      if (!runBatchHere) continue;
 
-    // ── Fresh batch-signed intents (separate from bootstrap intents) ─
-    // The bootstrap intents already committed monotone (timestamp,
-    // nonce). The batch attempts need newer intents. The emulator can
-    // execute many CLI steps in the same second, so pin the batch intent
-    // clock forward explicitly instead of relying on wall-clock drift.
-    const batchIntentNow = await getNetworkNow(args.lucid);
-    let batchIntentOffset = 60n;
-    for (const pair of BATCH_PAIRS) {
-      if (!pair.batchPrice) continue;
-      const intentPath = path.join(intentsDir, `${pair.slug}-batch.signed.json`);
-      await runStep(steps, `intent:create-and-sign:${pair.slug}:batch`, reportProgress, async () => {
-        const { createAndSignPreviewOracleIntent } = await import(
-          "../oracle/intent-create.js"
+      // (3) fresh batch intents for every pair created so far, with
+      // strictly-monotone (timestamp, nonce). One sub-step per intent.
+      const batchIntentNow = await getNetworkNow(args.lucid);
+      let batchIntentOffset = 60n + BigInt(size) * 10n;
+      for (const created of createdPairs) {
+        const batchIntentPath = path.join(intentsDir, `${created.slug}-batch-${size}.signed.json`);
+        await runStep(
+          steps,
+          `intent:create-and-sign:${created.slug}:batch-${size}`,
+          reportProgress,
+          async () => {
+            const { createAndSignPreviewOracleIntent } = await import(
+              "../oracle/intent-create.js"
+            );
+            const timestamp = batchIntentNow.unixTimeSec + batchIntentOffset;
+            const nonce = BigInt(batchIntentNow.unixTimeMs) + batchIntentOffset * 1000n;
+            batchIntentOffset += 1n;
+            const signed = await createAndSignPreviewOracleIntent({
+              statePath: protocolStatePath,
+              intentType: "OracleUpdate",
+              timestamp: timestamp.toString(),
+              nonce: nonce.toString(),
+              expiry: (timestamp + 3600n).toString(),
+              symbol: created.symbol,
+              price: created.batchPrice,
+              source: DOMAIN_NAME,
+            });
+            await writeStateJsonFile(batchIntentPath, signed);
+          },
         );
-        const timestamp = batchIntentNow.unixTimeSec + batchIntentOffset;
-        const nonce = BigInt(batchIntentNow.unixTimeMs) + batchIntentOffset * 1000n;
-        batchIntentOffset += 1n;
-        const signed = await createAndSignPreviewOracleIntent({
-          statePath: protocolStatePath,
-          intentType: "OracleUpdate",
-          timestamp: timestamp.toString(),
-          nonce: nonce.toString(),
-          expiry: (timestamp + 3600n).toString(),
-          symbol: pair.symbol,
-          price: pair.batchPrice,
-          source: DOMAIN_NAME,
-        });
-        await writeStateJsonFile(intentPath, signed);
-      });
-    }
+      }
 
-    // ── Batch attempts (descending, stop at first success) ─────────
-    let firstBatchSuccessSize: number | null = null;
-    for (const size of batchSizes.sort((a, b) => b - a)) {
+      // (4) attempt batch-N
       const manifestPath = path.join(manifestsDir, `batch-${size}.manifest.json`);
       const resultPath = path.join(manifestsDir, `batch-${size}.result.json`);
-
-      // Build the manifest in memory (same format as
-      // `init/batch-update-create.ts`, but skips the interactive prompt).
-      const updates = BATCH_PAIRS.slice(0, size).map((pair) => ({
-        statePath: path.join(pairsDir, `${pair.slug}.json`),
-        intentPath: path.join(intentsDir, `${pair.slug}-batch.signed.json`),
+      const updates = createdPairs.map((created) => ({
+        statePath: path.join(pairsDir, `${created.slug}.json`),
+        intentPath: path.join(intentsDir, `${created.slug}-batch-${size}.signed.json`),
       }));
       await writeFile(
         manifestPath,
@@ -355,7 +394,6 @@ export async function runEmulatorProtocolFlow(
             attemptMetrics = m;
           },
         );
-        if (firstBatchSuccessSize === null) firstBatchSuccessSize = size;
       } catch (error) {
         attemptError = error instanceof Error ? error.message : String(error);
       }
@@ -367,14 +405,24 @@ export async function runEmulatorProtocolFlow(
         error: attemptError,
       });
 
-      if (firstBatchSuccessSize !== null) break;
+      if (attemptOk) {
+        maxBatch = size;
+      } else {
+        probeFailedAt = size;
+        break;
+      }
     }
 
-    if (firstBatchSuccessSize === null) {
-      // No batch size succeeded. The flow returns here without running
-      // settle / withdraws / reclaim because they depend on receiver
-      // accrued fees produced by a successful batch (matches
-      // `run-all-cli.sh` semantics).
+    if (maxBatch === 0) {
+      // Either probe failed at size 1, or single-shot batch-N failed. The
+      // settle/withdraw/reclaim/republish/burn cluster needs accrued fees
+      // from a successful batch, so we short-circuit and let the report
+      // explain what happened.
+      reportProgress(
+        `[emulator-flow] no batch succeeded${
+          probeFailedAt ? ` (failed at batch-${probeFailedAt})` : ""
+        }; skipping settle + downstream steps`,
+      );
       return finalize();
     }
 
@@ -388,28 +436,65 @@ export async function runEmulatorProtocolFlow(
       });
     });
 
-    await runTxStep(steps, "receiver:withdraw", reportProgress, async () => {
-      const { receiverWithdraw } = await import("../transactions/receiver-withdraw.js");
-      const state = await receiverWithdraw({
-        amountLovelace: RECEIVER_WITHDRAW_LOVELACE,
-        statePath: clientStatePath,
-        protocolStatePath,
-        buildOnly: false,
-      });
-      await writeStateJsonFile(clientStatePath, state);
-    });
+    // Withdraw amounts must respect what's actually available on-chain:
+    //   - receiver: amount ≤ receiver.balance_lovelace
+    //   - payment-hook: amount ≤ payment_hook.accrued_fees_lovelace
+    // The constants above are "preferred" upper bounds. Clamp down to what
+    // settle just deposited so this flow works for any batchSize (the smoke
+    // test calls with batchSize: 1 which only accrues ~2 ADA, while a full
+    // probe accrues much more). A 1 ADA buffer is kept to avoid bumping
+    // into edge cases where the protocol leaves dust.
+    const clampWithdraw = (preferred: string, availableLovelace: bigint): bigint => {
+      const pref = BigInt(preferred);
+      const buffer = 1_000_000n;
+      const cap = availableLovelace > buffer ? availableLovelace - buffer : 0n;
+      return pref < cap ? pref : cap;
+    };
 
-    await runTxStep(steps, "payment-hook:withdraw", reportProgress, async () => {
-      const { paymentHookWithdraw } = await import(
-        "../transactions/payment-hook-withdraw.js"
-      );
-      const state = await paymentHookWithdraw({
-        amountLovelace: PAYMENT_HOOK_WITHDRAW_LOVELACE,
-        statePath: protocolStatePath,
-        buildOnly: false,
+    const clientStateAfterSettle = JSON.parse(
+      await readFile(clientStatePath, "utf8"),
+    );
+    const receiverBalance = BigInt(
+      clientStateAfterSettle?.receiver?.receiverState?.balanceLovelace ?? 0,
+    );
+    const receiverWithdrawAmount = clampWithdraw(RECEIVER_WITHDRAW_LOVELACE, receiverBalance);
+    if (receiverWithdrawAmount > 0n) {
+      await runTxStep(steps, "receiver:withdraw", reportProgress, async () => {
+        const { receiverWithdraw } = await import("../transactions/receiver-withdraw.js");
+        const state = await receiverWithdraw({
+          amountLovelace: receiverWithdrawAmount.toString(),
+          statePath: clientStatePath,
+          protocolStatePath,
+          buildOnly: false,
+        });
+        await writeStateJsonFile(clientStatePath, state);
       });
-      await writeStateJsonFile(protocolStatePath, state);
-    });
+    } else {
+      reportProgress("[emulator-flow] receiver:withdraw skipped (insufficient balance)");
+    }
+
+    const protocolStateAfterSettle = JSON.parse(
+      await readFile(protocolStatePath, "utf8"),
+    );
+    const hookAccrued = BigInt(
+      protocolStateAfterSettle?.paymentHookState?.accruedFeesLovelace ?? 0,
+    );
+    const hookWithdrawAmount = clampWithdraw(PAYMENT_HOOK_WITHDRAW_LOVELACE, hookAccrued);
+    if (hookWithdrawAmount > 0n) {
+      await runTxStep(steps, "payment-hook:withdraw", reportProgress, async () => {
+        const { paymentHookWithdraw } = await import(
+          "../transactions/payment-hook-withdraw.js"
+        );
+        const state = await paymentHookWithdraw({
+          amountLovelace: hookWithdrawAmount.toString(),
+          statePath: protocolStatePath,
+          buildOnly: false,
+        });
+        await writeStateJsonFile(protocolStatePath, state);
+      });
+    } else {
+      reportProgress("[emulator-flow] payment-hook:withdraw skipped (insufficient accrued)");
+    }
 
     await runTxStep(steps, "reclaim:payment-hook-reference-script", reportProgress, async () => {
       const { reclaimProtocolReferenceScript } = await import(
@@ -433,6 +518,29 @@ export async function runEmulatorProtocolFlow(
       });
       await writeStateJsonFile(protocolStatePath, state);
     });
+
+    // ── Final step: admin-gated pair burn ─────────────────────────────
+    // Mirrors step 31 of run-all-cli.sh. Burns the LAST pair the probe
+    // created (or, in single-shot mode, the last seeded pair), so the
+    // run always has something to retire regardless of where the probe
+    // stopped. The single tx fires:
+    //   - pair_state.spend.BurnPair  (consumes the Pair UTxO, no continuation)
+    //   - pair_state.mint.BurnPairs  (burns the matching Pair NFT, qty -1)
+    // Both validators require a config_admins signature.
+    const burnSlug = createdPairs[createdPairs.length - 1]?.slug;
+    if (burnSlug) {
+      await runTxStep(steps, `pair:burn:${burnSlug}`, reportProgress, async () => {
+        const { pairBurn } = await import("../transactions/pair-burn.js");
+        const pairStatePath = path.join(pairsDir, `${burnSlug}.json`);
+        const state = await pairBurn({
+          protocolStatePath,
+          clientStatePath,
+          pairStatePath,
+          buildOnly: false,
+        });
+        await writeStateJsonFile(pairStatePath, state);
+      });
+    }
 
     return finalize();
   } finally {
