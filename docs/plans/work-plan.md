@@ -7,9 +7,9 @@ Single work plan for the Cardano port of DIA's push-oracle contracts.
 - [Cardano Oracle Architecture](../architecture/cardano-oracle-architecture.md) — single architecture reference.
 - [Cardano Integration Requirement [PF]](../requirements/cardano-integration-requirement-pf.md) — DIA requirement document.
 - [Final Cardano Milestones](../milestones/final-cardano-milestones.md) — Catalyst milestone text.
-- [Milestone 1 Preview Evidence](../milestones/evidence/m1-preview-20260511-135140/milestone-1-preview-evidence.md) — M1 Preview verification log.
-- [Audit Remediation and Architecture Plan](./audit-remediation-and-architecture-plan.md) — active cleanup plan for audit findings, canonical ordering, evidence consistency, and documentation refresh.
+- [Milestone 1 Preview Evidence](../milestones/evidence/m1-preview-20260515-130925/milestone-1-preview-evidence.md) — M1 Preview verification log (latest rerun).
 - [Milestone 2 Feeder Strategy](./milestone-2-feeder-strategy.md) — recommended feeder split, DIA stack glossary, and M2 implementation direction.
+- [Audit report](../audit/) — `audit-report-20260515.md`.
 
 ## Scope
 
@@ -48,8 +48,9 @@ Tasks:
 - [x] Coordinator redeemers `ApplySingle`, `ApplyBatch`, and `ApplySettle`.
 - [x] Unit tests for Config, Hook, Receiver, Pair, and coordinator logic, with real DIA `OracleIntent` fixtures for signature validation. Inline Aiken `test` blocks cover every redeemer transition and the documented attack vectors (NFT exfiltration, accrued-fee drain via withdraw, expired/replayed intents, stale bootstrap, zero-add griefing, settle manifest mismatch, cross-script redeemer confusion).
 - [x] Finalize pair-NFT asset-name derivation as `blake2b_256(pair_id)`.
-- [x] Finalize batch-update fee unit as one Config-defined fee per updated pair.
-- [ ] Off-chain Lucid emulator adversarial matrix: full update / batch / settle / receiver top-up / receiver withdraw / hook withdraw / config-update transactions submitted through the Plutus VM with golden + every documented attack-vector negative case (two-client parallelism, expired intent, stale bootstrap duplicate, NFT redirect on settle and config-update, accrued drain via withdraw, settle without admin signature, non-admin withdraw).
+- [x] Finalize batch-update fee unit as Config-defined `base_fee_lovelace + n × per_pair_fee_lovelace` (two-component fee model).
+- [x] Admin-gated Pair NFT creation and burn paths in `pair_state` (see architecture §5.13 and `docs/security/m1-security-notes.md`).
+- [~] Off-chain Lucid emulator adversarial matrix: happy-path orchestrator delivered via `npm run benchmark:emulator` (see `_archived/20260516-emulator-benchmark-plan.md`; latest evidence `docs/milestones/evidence/m1-emulator-benchmark-20260515124543/`). Adversarial negative-case matrix (two-client parallelism, expired intent, stale bootstrap duplicate, NFT redirect on settle and config-update, accrued drain via withdraw, settle without admin signature, non-admin withdraw, duplicate live pair) is still open.
 
 ## Workstream B — Off-chain CLI and deployment tooling
 
@@ -95,7 +96,7 @@ Tasks:
 
 Tasks:
 
-- [x] **Preview evidence pack — fresh capture** on the current bytecode: full bootstrap (Config, PaymentHook, Receiver), reference-script publication, Receiver top-up, single oracle update, batch oracle update, **Settle**, Receiver withdraw, PaymentHook withdraw. Captured 2026-05-06 under `docs/milestones/evidence/m1-preview-20260506-084452/`. Historical pack `docs/milestones/evidence/m1-preview-20260427/` predates the current contracts and is kept only as historical proof.
+- [x] **Preview evidence pack — fresh capture** on the current bytecode: full bootstrap (Config, PaymentHook, Receiver), reference-script publication, Receiver top-up, single oracle update, batch oracle update, **Settle**, Receiver withdraw, PaymentHook withdraw, reference-script reclaim + republish. Latest capture 2026-05-15 under `docs/milestones/evidence/m1-preview-20260515-130925/`. Historical packs `docs/milestones/evidence/m1-preview-20260427/` and `preview_20260504/` predate the current contracts and are kept only as historical proof.
 - [ ] Mainnet deployment scripts and evidence (contract addresses, reference-script UTxOs, verified mainnet tx hashes).
 - [x] Operator runbook (onboarding a new client, subscribing a new pair, rotating signers, withdrawing accrued fees).
 - [ ] Developer documentation published via DIA's developer documentation website, covering:
