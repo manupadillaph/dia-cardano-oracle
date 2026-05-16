@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId } from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -215,7 +216,7 @@ export async function receiverUpdateMinUtxo(args: {
       receiverCbor: nextReceiverDatumCbor,
     },
     transactions: appendTransactionRecord(client.transactions, {
-      step: "preview:receiver:update-min-utxo",
+      step: stepId("receiver:update-min-utxo"),
       submittedTxHash,
       confirmed,
     }),
@@ -225,5 +226,5 @@ export async function receiverUpdateMinUtxo(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:receiver:update-min-utxo] ${message}`);
+  console.error(`[receiver:update-min-utxo] ${message}`);
 }

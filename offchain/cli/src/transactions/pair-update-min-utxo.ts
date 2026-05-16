@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId } from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -211,7 +212,7 @@ export async function pairUpdateMinUtxo(args: {
       pairCbor: nextPairDatumCbor,
     },
     transactions: appendTransactionRecord(pair.transactions, {
-      step: "preview:pair:update-min-utxo",
+      step: stepId("pair:update-min-utxo"),
       submittedTxHash,
       confirmed,
     }),
@@ -221,5 +222,5 @@ export async function pairUpdateMinUtxo(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:pair:update-min-utxo] ${message}`);
+  console.error(`[pair:update-min-utxo] ${message}`);
 }

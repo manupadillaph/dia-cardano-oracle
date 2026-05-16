@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 
 import {
   scriptHashFromValidator,
@@ -25,13 +26,13 @@ export async function publishPaymentHookReferenceScript(args: {
   statePath?: string;
   buildOnly: boolean;
 }): Promise<ConfigStateArtifact> {
-  const state = await readConfigState(path.resolve(args.statePath ?? "state/preview/config-bootstrap.json"));
+  const state = await readConfigState(path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`));
 
   if (!state.bootstrapRefs.paymentHook || !state.scripts.paymentHookUnit) {
     throw new Error("PaymentHook reference-script publish requires the selected PaymentHook bootstrap reference.");
   }
   if (!state.scripts.referenceHolderAddress) {
-    throw new Error("PaymentHook reference-script publish requires config parameterization first (run preview:config:parameterize).");
+    throw new Error("PaymentHook reference-script publish requires config parameterization first (run config:parameterize).");
   }
 
   reportProgress("Connecting to Preview and selecting the configured wallet");
@@ -43,7 +44,7 @@ export async function publishPaymentHookReferenceScript(args: {
     wallet.getUtxos(),
   ]);
   if (!state.compiledScripts.paymentHookValidator) {
-    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookValidator compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
   const referenceAddress = state.scripts.referenceHolderAddress;
@@ -130,7 +131,7 @@ export async function publishPaymentHookReferenceScript(args: {
       },
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:payment-hook:reference-script",
+      step: stepId("payment-hook:reference-script"),
       submittedTxHash,
       confirmed,
     }),
@@ -138,5 +139,5 @@ export async function publishPaymentHookReferenceScript(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:payment-hook:reference-script] ${message}`);
+  console.error(`[payment-hook:reference-script] ${message}`);
 }

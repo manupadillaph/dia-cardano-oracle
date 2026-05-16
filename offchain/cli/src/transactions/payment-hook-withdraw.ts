@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -45,14 +46,14 @@ export async function paymentHookWithdraw(args: {
   buildOnly: boolean;
 }): Promise<ConfigStateArtifact> {
   reportProgress(`Using amountLovelace=${args.amountLovelace} for payment-hook withdraw`);
-  const statePath = path.resolve(args.statePath ?? "state/preview/config-bootstrap.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`);
   reportProgress(`Loading config state from ${statePath}`);
   const state = await readConfigState(statePath);
 
   if (
     !state.paymentHookState ||
     !state.bootstrapRefs.paymentHook ||
-    !hasCompletedStep(state.transactions, "preview:payment-hook:bootstrap")
+    !hasCompletedStep(state.transactions, stepId("payment-hook:bootstrap"))
   ) {
     throw new Error("Payment-hook withdraw requires a state artifact produced after payment-hook bootstrap.");
   }
@@ -87,7 +88,7 @@ export async function paymentHookWithdraw(args: {
     ),
   ]);
   if (!state.compiledScripts?.paymentHookValidator) {
-    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookValidator compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
 
@@ -219,7 +220,7 @@ export async function paymentHookWithdraw(args: {
       paymentHookCbor: paymentHookDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:payment-hook:withdraw",
+      step: stepId("payment-hook:withdraw"),
       submittedTxHash,
       confirmed,
     }),
@@ -227,5 +228,5 @@ export async function paymentHookWithdraw(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:payment-hook:withdraw] ${message}`);
+  console.error(`[payment-hook:withdraw] ${message}`);
 }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 
 import {
   mintingPolicyFromCompiledScript,
@@ -31,7 +32,7 @@ export async function publishClientReferenceScripts(args: {
   protocolStatePath: string;
   buildOnly: boolean;
 }): Promise<ClientStateArtifact> {
-  const statePath = path.resolve(args.statePath ?? "state/preview/clients/client-a.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/clients/client-a.json`);
   reportProgress(`Loading client state from ${statePath}`);
   const { client: state, protocol } = await readClientContext({
     clientStatePath: statePath,
@@ -45,7 +46,7 @@ export async function publishClientReferenceScripts(args: {
   }
   if (!protocol.scripts.referenceHolderAddress) {
     throw new Error(
-      "Client reference-script publish requires config parameterization first (run preview:config:parameterize).",
+      "Client reference-script publish requires config parameterization first (run config:parameterize).",
     );
   }
 
@@ -61,21 +62,21 @@ export async function publishClientReferenceScripts(args: {
   const referenceAddress = protocol.scripts.referenceHolderAddress;
   if (!state.receiver) {
     throw new Error(
-      "Client reference-script publish requires a client artifact produced by preview:receiver:parameterize.",
+      "Client reference-script publish requires a client artifact produced by receiver:parameterize.",
     );
   }
   const latestWalletUtxos = walletUtxos;
   const receiver = await resolveReceiverArtifact(state);
   if (!state.compiledScripts?.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   if (!state.compiledScripts?.pairValidator) {
-    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairValidator compiled script not found. Run receiver:parameterize first.");
   }
   const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
   if (!state.compiledScripts?.pairMintPolicy) {
-    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const pairMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy);
 
@@ -196,7 +197,7 @@ export async function publishClientReferenceScripts(args: {
       receiverCbor: receiver.receiverCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:reference-scripts:publish-client",
+      step: stepId("reference-scripts:publish-client"),
       submittedTxHash,
       confirmed,
     }),
@@ -215,18 +216,18 @@ async function resolveReceiverArtifact(
 > {
   if (!state.receiver) {
     throw new Error(
-      "Client reference-script publish requires a client artifact produced by preview:receiver:parameterize.",
+      "Client reference-script publish requires a client artifact produced by receiver:parameterize.",
     );
   }
 
   if (!state.compiledScripts?.pairValidator) {
-    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairValidator compiled script not found. Run receiver:parameterize first.");
   }
   const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
   if (!state.compiledScripts?.pairMintPolicy) {
-    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const pairPolicyId =
     state.scripts.pairPolicyId ||
@@ -242,5 +243,5 @@ async function resolveReceiverArtifact(
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:reference-scripts:publish-client] ${message}`);
+  console.error(`[reference-scripts:publish-client] ${message}`);
 }

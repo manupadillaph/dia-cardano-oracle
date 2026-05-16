@@ -1,4 +1,5 @@
 import { unlink } from "node:fs/promises";
+import { stepId } from "../core/config.js";
 import path from "node:path";
 import { confirm } from "@inquirer/prompts";
 import { Constr, type UTxO } from "@lucid-evolution/lucid";
@@ -109,14 +110,14 @@ export async function submitOracleUpdate(args: {
     existingPair = null;
   }
   if (!client.compiledScripts.pairMintPolicy) {
-    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const pairMintPolicy = mintingPolicyFromCompiledScript(client.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
   const pairTokenName = diaIntentTokenNameFromSymbol(intent);
   const pairUnit = `${pairPolicyId}${pairTokenName}`;
   if (!client.compiledScripts.pairValidator) {
-    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairValidator compiled script not found. Run receiver:parameterize first.");
   }
   const pairValidator = spendingValidatorFromCompiledScript(client.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
@@ -277,11 +278,11 @@ export async function submitOracleUpdate(args: {
   }
 
   if (!state.compiledScripts.coordinatorValidator) {
-    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("coordinatorValidator compiled script not found. Run config:parameterize first.");
   }
   const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
   if (!state.compiledScripts.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
@@ -490,7 +491,7 @@ export async function submitOracleUpdate(args: {
       pairCbor: nextPairDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:update",
+      step: stepId("update"),
       submittedTxHash,
       confirmed,
     }),
@@ -498,5 +499,5 @@ export async function submitOracleUpdate(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:update] ${message}`);
+  console.error(`[update] ${message}`);
 }

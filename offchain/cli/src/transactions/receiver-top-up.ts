@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -38,7 +39,7 @@ export async function receiverTopUp(args: {
   buildOnly: boolean;
 }): Promise<ClientStateArtifact> {
   reportProgress(`Using amountLovelace=${args.amountLovelace} for receiver top-up`);
-  const statePath = path.resolve(args.statePath ?? "state/preview/clients/client-a.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/clients/client-a.json`);
   reportProgress(`Loading client state from ${statePath}`);
   const { client: state, protocol } = await readClientContext({
     clientStatePath: statePath,
@@ -65,7 +66,7 @@ export async function receiverTopUp(args: {
     "receiver",
   );
   if (!state.compiledScripts?.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
 
@@ -183,7 +184,7 @@ export async function receiverTopUp(args: {
       receiverCbor: receiverDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:receiver:top-up",
+      step: stepId("receiver:top-up"),
       submittedTxHash,
       confirmed,
     }),
@@ -191,5 +192,5 @@ export async function receiverTopUp(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:receiver:top-up] ${message}`);
+  console.error(`[receiver:top-up] ${message}`);
 }

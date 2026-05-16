@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -43,13 +44,13 @@ export async function paymentHookBootstrap(args: {
 }): Promise<ConfigStateArtifact> {
   reportProgress("Using PaymentHook values from the protocol artifact");
 
-  const statePath = path.resolve(args.statePath ?? "state/preview/config-bootstrap.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`);
   reportProgress(`Loading config state from ${statePath}`);
   const state = await readConfigState(statePath);
 
-  if (hasCompletedStep(state.transactions, "preview:payment-hook:bootstrap")) {
+  if (hasCompletedStep(state.transactions, stepId("payment-hook:bootstrap"))) {
     throw new Error(
-      "PaymentHook bootstrap was already completed for this protocol artifact. Reuse the current artifact and continue with the next step instead of running preview:payment-hook:bootstrap again.",
+      "PaymentHook bootstrap was already completed for this protocol artifact. Reuse the current artifact and continue with the next step instead of running payment-hook:bootstrap again.",
     );
   }
 
@@ -121,7 +122,7 @@ export async function paymentHookBootstrap(args: {
         ];
 
   if (!state.compiledScripts?.configValidator) {
-    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("configValidator compiled script not found. Run config:parameterize first.");
   }
   const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
   const paymentHookAssetName = normalizeHex(
@@ -129,7 +130,7 @@ export async function paymentHookBootstrap(args: {
     "paymentHookAssetName",
   );
   if (!state.compiledScripts?.paymentHookMintPolicy) {
-    throw new Error("paymentHookMintPolicy compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookMintPolicy compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.paymentHookMintPolicy);
   const paymentHookPolicyId = policyIdFromMintingPolicy(paymentHookMintPolicy);
@@ -142,7 +143,7 @@ export async function paymentHookBootstrap(args: {
   const paymentHookUnit = `${paymentHookPolicyId}${paymentHookAssetName}`;
 
   if (!state.compiledScripts?.paymentHookValidator) {
-    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookValidator compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookValidator = spendingValidatorFromCompiledScript(state.compiledScripts.paymentHookValidator);
   const paymentHookValidatorHash = scriptHashFromValidator(paymentHookValidator);
@@ -175,12 +176,12 @@ export async function paymentHookBootstrap(args: {
   assertNftBootstrapDestinationIsNotFundingWallet(
     state.scripts.configValidatorAddress,
     walletAddress,
-    "preview:payment-hook:bootstrap:config-output",
+    stepId("payment-hook:bootstrap:config-output"),
   );
   assertNftBootstrapDestinationIsNotFundingWallet(
     paymentHookValidatorAddress,
     walletAddress,
-    "preview:payment-hook:bootstrap:hook-output",
+    stepId("payment-hook:bootstrap:hook-output"),
   );
   const txBuilder = lucid
     .newTx()
@@ -282,7 +283,7 @@ export async function paymentHookBootstrap(args: {
       paymentHookCbor: paymentHookDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:payment-hook:bootstrap",
+      step: stepId("payment-hook:bootstrap"),
       submittedTxHash,
       confirmed,
     }),
@@ -290,7 +291,7 @@ export async function paymentHookBootstrap(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:payment-hook:bootstrap] ${message}`);
+  console.error(`[payment-hook:bootstrap] ${message}`);
 }
 
 function resolvePaymentHookBootstrapInput(
@@ -316,7 +317,7 @@ function resolvePaymentHookBootstrapInput(
 
   if (!paymentHookAssetName || !minUtxoLovelace) {
     throw new Error(
-      "PaymentHook bootstrap requires the PaymentHook values already stored in the protocol artifact. Run preview:payment-hook:parameterize first.",
+      "PaymentHook bootstrap requires the PaymentHook values already stored in the protocol artifact. Run payment-hook:parameterize first.",
     );
   }
 

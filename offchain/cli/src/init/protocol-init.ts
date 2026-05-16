@@ -211,7 +211,7 @@ async function promptForProtocolConfigInput(
   defaultSigner: string,
   walletAddress: string,
 ): Promise<ProtocolInitConfigInput> {
-  console.error("[preview:protocol:init] Enter the initial Config values.");
+  console.error("[protocol:init] Enter the initial Config values.");
   const defaults = defaultProtocolConfigInput(defaultSigner, walletAddress);
   const validConfigSignersRaw = await promptForText({
     message: "Valid config signers (comma-separated payment key hashes from the configured Cardano wallet)",

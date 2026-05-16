@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { stepId, networkTag } from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
@@ -49,14 +50,14 @@ export async function paymentHookUpdate(args: {
 }): Promise<ConfigStateArtifact> {
   reportProgress(`Loading payment-hook update input from ${path.resolve(args.inputPath)}`);
   const input = await readPaymentHookUpdateInput(path.resolve(args.inputPath));
-  const statePath = path.resolve(args.statePath ?? "state/preview/config-bootstrap.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`);
   reportProgress(`Loading config state from ${statePath}`);
   const state = await readConfigState(statePath);
 
   if (
     !state.paymentHookState ||
     !state.bootstrapRefs.paymentHook ||
-    !hasCompletedStep(state.transactions, "preview:payment-hook:bootstrap")
+    !hasCompletedStep(state.transactions, stepId("payment-hook:bootstrap"))
   ) {
     throw new Error("PaymentHook update requires a state artifact produced after payment-hook bootstrap.");
   }
@@ -96,7 +97,7 @@ export async function paymentHookUpdate(args: {
   );
 
   if (!state.compiledScripts?.paymentHookValidator) {
-    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookValidator compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookValidator = spendingValidatorFromCompiledScript(
     state.compiledScripts.paymentHookValidator,
@@ -212,7 +213,7 @@ export async function paymentHookUpdate(args: {
       paymentHookCbor: paymentHookDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:payment-hook:update",
+      step: stepId("payment-hook:update"),
       submittedTxHash,
       confirmed,
     }),
@@ -239,5 +240,5 @@ async function readPaymentHookUpdateInput(inputPath: string): Promise<PaymentHoo
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:payment-hook:update] ${message}`);
+  console.error(`[payment-hook:update] ${message}`);
 }

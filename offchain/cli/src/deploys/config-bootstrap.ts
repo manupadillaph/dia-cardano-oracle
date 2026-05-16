@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId } from "../core/config.js";
 import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -65,9 +66,9 @@ export async function configBootstrap(args: {
     ? await readConfigState(path.resolve(args.statePath))
     : null;
 
-  if (hasCompletedStep(previousState?.transactions, "preview:config:bootstrap")) {
+  if (hasCompletedStep(previousState?.transactions, stepId("config:bootstrap"))) {
     throw new Error(
-      "Config bootstrap was already completed for this protocol artifact. Reuse the current artifact and continue with the next step instead of running preview:config:bootstrap again.",
+      "Config bootstrap was already completed for this protocol artifact. Reuse the current artifact and continue with the next step instead of running config:bootstrap again.",
     );
   }
 
@@ -90,7 +91,7 @@ export async function configBootstrap(args: {
 
   if (!walletBootstrapUtxo) {
     throw new Error(
-      "No suitable wallet UTxO is available for config bootstrap. Fund the configured Preview wallet and inspect it with 'npm run cli -- preview:wallet:utxos'.",
+      "No suitable wallet UTxO is available for config bootstrap. Fund the configured Preview wallet and inspect it with 'npm run cli -- wallet:utxos'.",
     );
   }
 
@@ -108,7 +109,7 @@ export async function configBootstrap(args: {
     "configAssetName",
   );
   if (!previousState?.compiledScripts?.configMintPolicy) {
-    throw new Error("configMintPolicy compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("configMintPolicy compiled script not found. Run config:parameterize first.");
   }
   const configMintPolicy = mintingPolicyFromCompiledScript(previousState.compiledScripts.configMintPolicy);
   const configPolicyId = policyIdFromMintingPolicy(configMintPolicy);
@@ -118,14 +119,14 @@ export async function configBootstrap(args: {
   const configUnit = `${configPolicyId}${configAssetName}`;
 
   if (!previousState.compiledScripts.configValidator) {
-    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("configValidator compiled script not found. Run config:parameterize first.");
   }
   const configValidator = spendingValidatorFromCompiledScript(previousState.compiledScripts.configValidator);
   const configValidatorHash = scriptHashFromValidator(configValidator);
   const configValidatorAddress = scriptAddressFromValidator(configValidator);
 
   if (!previousState.compiledScripts.coordinatorValidator) {
-    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("coordinatorValidator compiled script not found. Run config:parameterize first.");
   }
   const coordinatorValidator = withdrawalValidatorFromCompiledScript(previousState.compiledScripts.coordinatorValidator);
   const coordinatorHash = scriptHashFromValidator(coordinatorValidator);
@@ -171,7 +172,7 @@ export async function configBootstrap(args: {
   assertNftBootstrapDestinationIsNotFundingWallet(
     configValidatorAddress,
     walletAddress,
-    "preview:config:bootstrap",
+    stepId("config:bootstrap"),
   );
   const txBuilder = lucid
     .newTx()
@@ -273,7 +274,7 @@ export async function configBootstrap(args: {
     },
     referenceScripts: previousState?.referenceScripts,
     transactions: appendTransactionRecord(previousState?.transactions, {
-      step: "preview:config:bootstrap",
+      step: stepId("config:bootstrap"),
       submittedTxHash,
       confirmed,
     }),
@@ -311,7 +312,7 @@ function resolveConfigBootstrapInput(
     !minUtxoLovelace
   ) {
     throw new Error(
-      "Config bootstrap requires the Config values already stored in the protocol artifact. Run preview:protocol:init and preview:config:parameterize first.",
+      "Config bootstrap requires the Config values already stored in the protocol artifact. Run protocol:init and config:parameterize first.",
     );
   }
 
@@ -339,5 +340,5 @@ function resolveConfigBootstrapInput(
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:config:bootstrap] ${message}`);
+  console.error(`[config:bootstrap] ${message}`);
 }

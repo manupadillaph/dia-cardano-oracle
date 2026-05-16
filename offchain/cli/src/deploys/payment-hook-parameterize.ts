@@ -1,4 +1,5 @@
 import path from "node:path";
+import { networkTag } from "../core/config.js";
 
 import {
   makePaymentHookMintingPolicy,
@@ -28,7 +29,7 @@ export async function parameterizePaymentHookScripts(args: {
   statePath?: string;
 }): Promise<ConfigStateArtifact> {
   reportProgress("Using PaymentHook values from the protocol artifact");
-  const state = await readConfigState(path.resolve(args.statePath ?? "state/preview/config-bootstrap.json"));
+  const state = await readConfigState(path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`));
 
   reportProgress("Connecting to Preview and selecting the configured wallet");
   const lucid = await makeConfiguredLucid();
@@ -45,7 +46,7 @@ export async function parameterizePaymentHookScripts(args: {
     : selectBootstrapUtxo(walletUtxos, 0n, [state.bootstrapRefs.config]);
   if (!selectedBootstrapUtxo) {
     throw new Error(
-      "No suitable pure ADA wallet UTxO is available for payment-hook script parameterization. Inspect the wallet with 'npm run cli -- preview:wallet:utxos'.",
+      "No suitable pure ADA wallet UTxO is available for payment-hook script parameterization. Inspect the wallet with 'npm run cli -- wallet:utxos'.",
     );
   }
 
@@ -131,7 +132,7 @@ export async function parameterizePaymentHookScripts(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:payment-hook:parameterize] ${message}`);
+  console.error(`[payment-hook:parameterize] ${message}`);
 }
 
 function resolvePaymentHookParameterizeInput(
@@ -153,7 +154,7 @@ function resolvePaymentHookParameterizeInput(
 
   if (!paymentHookAssetName || !minUtxoLovelace) {
     throw new Error(
-      "PaymentHook parameterization requires paymentHookAssetName and minUtxoLovelace in the protocol artifact. Run preview:protocol:init first.",
+      "PaymentHook parameterization requires paymentHookAssetName and minUtxoLovelace in the protocol artifact. Run protocol:init first.",
     );
   }
 

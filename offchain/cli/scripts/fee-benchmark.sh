@@ -124,7 +124,7 @@ if ! [[ "$PROBE_MAX_HARD" =~ ^[0-9]+$ ]] || (( PROBE_MAX_HARD < PROBE_START )); 
   echo "[bench] --probe-max must be ≥ --probe-start" >&2; exit 1
 fi
 
-STATE_NAME="preview_rerun_${EXISTING_RUN_ID}"
+STATE_NAME="${NETWORK_TAG:-preview}_run_${EXISTING_RUN_ID}"
 STATE_REL="./state/${STATE_NAME}"
 STATE_ROOT="$CLI_DIR/state/${STATE_NAME}"
 # Bench artifacts (intents, manifests, results) live in their own subfolder
@@ -173,7 +173,7 @@ fi
 echo "[bench] provider     : $CARDANO_PROVIDER"
 
 echo "[bench] fetching protocol parameters"
-PROTOCOL_PARAMS_JSON="$(npm run --silent cli -- preview:protocol)"
+PROTOCOL_PARAMS_JSON="$(npm run --silent cli -- protocol)"
 printf '%s\n' "$PROTOCOL_PARAMS_JSON" > "$BENCH_EVIDENCE/protocol-parameters.json"
 PROTOCOL_LIMITS="$(
   PROTOCOL_PARAMS_JSON="$PROTOCOL_PARAMS_JSON" node --input-type=module <<'NODE'
@@ -277,7 +277,7 @@ generate_intent() {
   local symbol="${PAIR_SYMBOLS[$slug]}"
   echo "[bench] intent: $slug  tag=$tag  price=$price  seq=$PRICE_SEQ"
   npm run --silent cli -- \
-    preview:intent:create-and-sign \
+    intent:create-and-sign \
     --state "$STATE_REL/config-bootstrap.json" \
     --intent-type OracleUpdate \
     --symbol "$symbol" \
@@ -336,7 +336,7 @@ try_tx() {
 }
 
 # seed_pair SLUG
-# Runs preview:update for SLUG only if its state file does not exist yet, so
+# Runs update for SLUG only if its state file does not exist yet, so
 # the slug owns a Pair UTxO before we start probing pure-update batches. Idempotent.
 seed_pair() {
   local slug="$1"
@@ -348,7 +348,7 @@ seed_pair() {
   local tag="seed"
   generate_intent "$slug" "$tag"
   run_tx "$BENCH_EVIDENCE/seed-${slug}.log" \
-    "preview:update \
+    "update \
      --intent $BENCH_STATE_REL/intents/${slug}-${tag}.signed.json \
      --protocol-state $STATE_REL/config-bootstrap.json \
      --client-state $STATE_REL/clients/${CLIENT_ID}.json \
@@ -453,7 +453,7 @@ echo "[bench] top-up       : $TOP_UP_LOVELACE lovelace ($(awk "BEGIN{printf \"%.
 echo ""
 echo "[bench] ── Top-up receiver: $TOP_UP_LOVELACE lovelace ──"
 run_tx "$BENCH_EVIDENCE/topup.log" \
-  "preview:receiver:top-up --amount-lovelace $TOP_UP_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+  "receiver:top-up --amount-lovelace $TOP_UP_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 
 # ── Pre-seed: make sure the first SEED_TARGET pairs already exist ─────────────
 # So the first batch the chosen mode runs (probe-PROBE_START or batch-MAX_BATCH)
@@ -488,7 +488,7 @@ if (( RUN_PROBE == 1 )); then
     echo ""
     echo "[bench] [probe] attempting batch-${N} (${N} pure updates)"
     if try_tx "$log" \
-      "preview:update:batch \
+      "update:batch \
        --protocol-state $STATE_REL/config-bootstrap.json \
        --client-state $STATE_REL/clients/${CLIENT_ID}.json \
        --manifest $BENCH_STATE_REL/manifests/bench-${tag}.manifest.json \
@@ -554,7 +554,7 @@ for cycle in $(seq 1 "$CYCLES"); do
 
   upd_log="$BENCH_EVIDENCE/c${cycle}-update.log"
   run_tx "$upd_log" \
-    "preview:update \
+    "update \
      --intent $BENCH_STATE_REL/intents/${UPDATE_SLUG}-${upd_tag}.signed.json \
      --protocol-state $STATE_REL/config-bootstrap.json \
      --client-state $STATE_REL/clients/${CLIENT_ID}.json \
@@ -578,7 +578,7 @@ for cycle in $(seq 1 "$CYCLES"); do
 
     bat_log="$BENCH_EVIDENCE/c${cycle}-batch${size}.log"
     run_tx "$bat_log" \
-      "preview:update:batch \
+      "update:batch \
        --protocol-state $STATE_REL/config-bootstrap.json \
        --client-state $STATE_REL/clients/${CLIENT_ID}.json \
        --manifest $BENCH_STATE_REL/manifests/bench-${bat_tag}.manifest.json \

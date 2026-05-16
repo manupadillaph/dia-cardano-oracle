@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 import { Constr, type OutRef, type UTxO } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -40,16 +41,16 @@ export async function receiverBootstrap(args: {
 }): Promise<ClientStateArtifact> {
   reportProgress("Using Receiver values from the client artifact");
 
-  const statePath = path.resolve(args.statePath ?? "state/preview/clients/client-a.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/clients/client-a.json`);
   reportProgress(`Loading config state from ${statePath}`);
   const { client: state, protocol } = await readClientContext({
     clientStatePath: statePath,
     protocolStatePath: args.protocolStatePath,
   });
 
-  if (hasCompletedStep(state.transactions, "preview:receiver:bootstrap")) {
+  if (hasCompletedStep(state.transactions, stepId("receiver:bootstrap"))) {
     throw new Error(
-      "Receiver bootstrap was already completed for this client artifact. Reuse the current artifact and continue with the next step instead of running preview:receiver:bootstrap again.",
+      "Receiver bootstrap was already completed for this client artifact. Reuse the current artifact and continue with the next step instead of running receiver:bootstrap again.",
     );
   }
 
@@ -106,27 +107,27 @@ export async function receiverBootstrap(args: {
   };
 
   if (!state.compiledScripts?.receiverMintPolicy) {
-    throw new Error("receiverMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const receiverMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.receiverMintPolicy);
   const receiverPolicyId = policyIdFromMintingPolicy(receiverMintPolicy);
   const receiverUnit = `${receiverPolicyId}${receiverAssetName}`;
 
   if (!state.compiledScripts?.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
   const receiverValidatorAddress = scriptAddressFromValidator(receiverValidator);
 
   if (!state.compiledScripts?.pairMintPolicy) {
-    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const pairMintPolicy = mintingPolicyFromCompiledScript(state.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
 
   if (!state.compiledScripts?.pairValidator) {
-    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairValidator compiled script not found. Run receiver:parameterize first.");
   }
   const pairValidator = spendingValidatorFromCompiledScript(state.compiledScripts.pairValidator);
   const pairValidatorHash = scriptHashFromValidator(pairValidator);
@@ -163,7 +164,7 @@ export async function receiverBootstrap(args: {
   assertNftBootstrapDestinationIsNotFundingWallet(
     receiverValidatorAddress,
     walletAddress,
-    "preview:receiver:bootstrap",
+    stepId("receiver:bootstrap"),
   );
   const txBuilder = lucid
     .newTx()
@@ -246,7 +247,7 @@ export async function receiverBootstrap(args: {
       receiverCbor: receiverDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:receiver:bootstrap",
+      step: stepId("receiver:bootstrap"),
       submittedTxHash,
       confirmed,
     }),
@@ -254,7 +255,7 @@ export async function receiverBootstrap(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:receiver:bootstrap] ${message}`);
+  console.error(`[receiver:bootstrap] ${message}`);
 }
 
 function resolveReceiverBootstrapInput(state: ClientStateArtifact): {
@@ -274,7 +275,7 @@ function resolveReceiverBootstrapInput(state: ClientStateArtifact): {
 
   if (!clientId || !receiverAssetName || !minUtxoLovelace) {
     throw new Error(
-      "Receiver bootstrap requires the Receiver values already stored in the client artifact. Run preview:client:init and preview:receiver:parameterize first.",
+      "Receiver bootstrap requires the Receiver values already stored in the client artifact. Run client:init and receiver:parameterize first.",
     );
   }
 

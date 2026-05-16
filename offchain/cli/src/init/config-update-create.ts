@@ -40,7 +40,7 @@ export async function createConfigUpdateDraft(args: {
   statePath: string;
 }): Promise<ConfigUpdateDraft> {
   const state = await readConfigState(path.resolve(args.statePath));
-  console.error("[preview:config:update:create] Enter the next Config values.");
+  console.error("[config:update:create] Enter the next Config values.");
 
   const validConfigSignersRaw = await promptForText({
     message: "Valid config signers (comma-separated payment key hashes)",

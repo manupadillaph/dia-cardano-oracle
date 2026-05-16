@@ -56,7 +56,7 @@ export async function parameterizeConfigScripts(args: {
     : selectBootstrapUtxo(walletUtxos);
   if (!selectedBootstrapUtxo) {
     throw new Error(
-      "No suitable pure ADA wallet UTxO is available for config script parameterization. Inspect the wallet with 'npm run cli -- preview:wallet:utxos'.",
+      "No suitable pure ADA wallet UTxO is available for config script parameterization. Inspect the wallet with 'npm run cli -- wallet:utxos'.",
     );
   }
 
@@ -164,7 +164,7 @@ export async function parameterizeConfigScripts(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:config:parameterize] ${message}`);
+  console.error(`[config:parameterize] ${message}`);
 }
 
 function resolveConfigParameterizeInput(
@@ -206,7 +206,7 @@ function resolveConfigParameterizeInput(
     !minUtxoLovelace
   ) {
     throw new Error(
-      "Config parameterization requires configAssetName and Config state values in the protocol artifact. Run preview:protocol:init first.",
+      "Config parameterization requires configAssetName and Config state values in the protocol artifact. Run protocol:init first.",
     );
   }
 

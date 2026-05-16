@@ -1,4 +1,5 @@
 import path from "node:path";
+import { networkTag } from "../core/config.js";
 
 import {
   makePairStateMintingPolicy,
@@ -30,7 +31,7 @@ export async function parameterizeReceiverScripts(args: {
   protocolStatePath: string;
 }): Promise<ClientStateArtifact> {
   const { client: state, protocol } = await readClientContext({
-    clientStatePath: path.resolve(args.statePath ?? "state/preview/clients/client-a.json"),
+    clientStatePath: path.resolve(args.statePath ?? `state/${networkTag()}/clients/client-a.json`),
     protocolStatePath: args.protocolStatePath,
   });
   reportProgress("Using receiver values from the client artifact");
@@ -56,7 +57,7 @@ export async function parameterizeReceiverScripts(args: {
       ]);
   if (!selectedBootstrapUtxo) {
     throw new Error(
-      "No suitable pure ADA wallet UTxO is available for receiver script parameterization. Inspect the wallet with 'npm run cli -- preview:wallet:utxos'.",
+      "No suitable pure ADA wallet UTxO is available for receiver script parameterization. Inspect the wallet with 'npm run cli -- wallet:utxos'.",
     );
   }
 
@@ -159,7 +160,7 @@ function resolveReceiverParameterizeInput(state: ClientStateArtifact): ReceiverP
 
   if (!clientId || !receiverAssetName || !minUtxoLovelace) {
     throw new Error(
-      "Receiver parameterization requires clientId, receiverAssetName, and minUtxoLovelace in the client artifact. Run preview:client:init first.",
+      "Receiver parameterization requires clientId, receiverAssetName, and minUtxoLovelace in the client artifact. Run client:init first.",
     );
   }
 
@@ -174,5 +175,5 @@ function resolveReceiverParameterizeInput(state: ClientStateArtifact): ReceiverP
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:receiver:parameterize] ${message}`);
+  console.error(`[receiver:parameterize] ${message}`);
 }

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -47,7 +48,7 @@ export async function receiverWithdraw(args: {
   buildOnly: boolean;
 }): Promise<ClientStateArtifact> {
   reportProgress(`Using amountLovelace=${args.amountLovelace} for receiver withdraw`);
-  const statePath = path.resolve(args.statePath ?? "state/preview/clients/client-a.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/clients/client-a.json`);
   reportProgress(`Loading client state from ${statePath}`);
   const { client: state, protocol } = await readClientContext({
     clientStatePath: statePath,
@@ -88,7 +89,7 @@ export async function receiverWithdraw(args: {
     ),
   ]);
   if (!state.compiledScripts?.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
 
@@ -222,7 +223,7 @@ export async function receiverWithdraw(args: {
       receiverCbor: receiverDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:receiver:withdraw",
+      step: stepId("receiver:withdraw"),
       submittedTxHash,
       confirmed,
     }),
@@ -230,5 +231,5 @@ export async function receiverWithdraw(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:receiver:withdraw] ${message}`);
+  console.error(`[receiver:withdraw] ${message}`);
 }

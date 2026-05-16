@@ -86,21 +86,47 @@ if (( FROM_STEP > 1 )); then
   fi
 fi
 
+# Load .env early so CARDANO_NETWORK can drive every network-scoped path,
+# evidence directory, and explorer link below. Anything in .env (including
+# CARDANO_PROVIDER and POST_TX_DELAY_SECONDS) becomes available here too.
+if [[ -f "$CLI_DIR/.env" ]]; then
+  set -a
+  source "$CLI_DIR/.env"
+  set +a
+fi
+
+# Derived from CARDANO_NETWORK in .env: "preview" or "mainnet". Everything
+# below — state dirs, evidence dirs, explorer URL — is keyed off this tag.
+CARDANO_NETWORK="${CARDANO_NETWORK:-Preview}"
+NETWORK_TAG="$(printf '%s' "$CARDANO_NETWORK" | tr '[:upper:]' '[:lower:]')"
+if [[ "$NETWORK_TAG" != "preview" && "$NETWORK_TAG" != "mainnet" ]]; then
+  echo "[run] unsupported CARDANO_NETWORK=$CARDANO_NETWORK (expected Preview or Mainnet)" >&2
+  exit 1
+fi
+
 RUN_ID="${EXPLICIT_RUN_ID:-$(date -u +%Y%m%d-%H%M%S)}"
-STATE_NAME="preview_rerun_${RUN_ID}"
+STATE_NAME="${NETWORK_TAG}_run_${RUN_ID}"
 STATE_REL="./state/${STATE_NAME}"
 STATE_ROOT="$CLI_DIR/state/${STATE_NAME}"
-EVIDENCE_NAME="m1-preview-${RUN_ID}"
+EVIDENCE_NAME="m1-${NETWORK_TAG}-${RUN_ID}"
 EVIDENCE_ROOT="$REPO/docs/milestones/evidence/${EVIDENCE_NAME}"
 CARDANO_PROVIDER="${CARDANO_PROVIDER:-Blockfrost}"
 POST_TX_DELAY_SECONDS="${POST_TX_DELAY_SECONDS:-15}"
 
-declare -ar PROTECTED_STATE_DIRS=(
-  "preview_20260504"
-)
-declare -ar PROTECTED_EVIDENCE_DIRS=(
-  "m1-preview-20260427"
-)
+# Original M1 Preview state and evidence directories — preserved as immutable
+# audit artifacts. The cleanup pass below skips them even when --clean-previous
+# is set. Only meaningful on Preview; on Mainnet these lists are empty.
+if [[ "$NETWORK_TAG" == "preview" ]]; then
+  declare -ar PROTECTED_STATE_DIRS=(
+    "preview_20260504"
+  )
+  declare -ar PROTECTED_EVIDENCE_DIRS=(
+    "m1-preview-20260427"
+  )
+else
+  declare -ar PROTECTED_STATE_DIRS=()
+  declare -ar PROTECTED_EVIDENCE_DIRS=()
+fi
 
 CLIENT_ID="client-a"
 DOMAIN_NAME="DIA Oracle"
@@ -108,7 +134,7 @@ DOMAIN_VERSION="1.0"
 DOMAIN_SOURCE_CHAIN_ID="100640"
 DOMAIN_VERIFYING_CONTRACT="0xF8c614A483A0427A13512F52ac72A576678bE317"
 BASE_FEE_LOVELACE="600000"
-PER_PAIR_FEE_LOVELACE="400000"
+PER_PAIR_FEE_LOVELACE="250000"
 MAX_BOOTSTRAP_DRIFT_SECONDS="300"
 CONFIG_MIN_UTXO_LOVELACE="5000000"
 CONFIG_ASSET_LABEL="DIA_CONFIG"
@@ -203,7 +229,7 @@ cleanup_previous_runs() {
   local dir_name
   shopt -s nullglob
 
-  for dir_path in "$CLI_DIR"/state/preview_rerun_*; do
+  for dir_path in "$CLI_DIR"/state/"${NETWORK_TAG}"_run_*; do
     dir_name="$(basename "$dir_path")"
     case " ${PROTECTED_STATE_DIRS[*]} " in
       *" $dir_name "*) continue ;;
@@ -211,7 +237,7 @@ cleanup_previous_runs() {
     rm -rf "$dir_path"
   done
 
-  for dir_path in "$REPO"/docs/milestones/evidence/m1-preview-*; do
+  for dir_path in "$REPO"/docs/milestones/evidence/m1-"${NETWORK_TAG}"-*; do
     dir_name="$(basename "$dir_path")"
     case " ${PROTECTED_EVIDENCE_DIRS[*]} " in
       *" $dir_name "*) continue ;;
@@ -228,8 +254,8 @@ if (( FROM_STEP == 1 )); then
   fi
   rm -rf "$STATE_ROOT" "$EVIDENCE_ROOT"
 else
-  [[ -d "$STATE_ROOT" ]] || { echo "[rerun] state root not found: $STATE_ROOT" >&2; exit 1; }
-  [[ -d "$EVIDENCE_ROOT" ]] || { echo "[rerun] evidence root not found: $EVIDENCE_ROOT" >&2; exit 1; }
+  [[ -d "$STATE_ROOT" ]] || { echo "[run] state root not found: $STATE_ROOT" >&2; exit 1; }
+  [[ -d "$EVIDENCE_ROOT" ]] || { echo "[run] evidence root not found: $EVIDENCE_ROOT" >&2; exit 1; }
 fi
 
 mkdir -p \
@@ -243,23 +269,20 @@ exec > >(tee -a "$EVIDENCE_ROOT/00-master.log") 2>&1
 
 cd "$CLI_DIR"
 
-set -a
-source "$CLI_DIR/.env"
-set +a
-
+export CARDANO_NETWORK
 export CARDANO_PROVIDER
 
 if [[ -z "${DIA_EVM_PRIVATE_KEY:-}" ]]; then
-  echo "[rerun] DIA_EVM_PRIVATE_KEY is required for explicit non-interactive intent signing" >&2
+  echo "[run] DIA_EVM_PRIVATE_KEY is required for explicit non-interactive intent signing" >&2
   exit 1
 fi
 
-echo "[rerun] run id: $RUN_ID"
-echo "[rerun] from step: $FROM_STEP"
-echo "[rerun] clean previous: $CLEAN_PREVIOUS"
-echo "[rerun] state root: $STATE_ROOT"
-echo "[rerun] evidence root: $EVIDENCE_ROOT"
-echo "[rerun] cardano provider: $CARDANO_PROVIDER"
+echo "[run] run id: $RUN_ID"
+echo "[run] from step: $FROM_STEP"
+echo "[run] clean previous: $CLEAN_PREVIOUS"
+echo "[run] state root: $STATE_ROOT"
+echo "[run] evidence root: $EVIDENCE_ROOT"
+echo "[run] cardano provider: $CARDANO_PROVIDER"
 
 should_run_step() {
   local step="$1"
@@ -270,7 +293,7 @@ run_cli_logged() {
   local log_name="$1"
   shift
   local cli_cmd="$*"
-  echo "[rerun] $cli_cmd"
+  echo "[run] $cli_cmd"
   script -q -e -c "npm run cli -- $cli_cmd" /dev/null | tee "$EVIDENCE_ROOT/$log_name"
 }
 
@@ -278,7 +301,7 @@ append_cli_log() {
   local log_name="$1"
   shift
   local cli_cmd="$*"
-  echo "[rerun] $cli_cmd" | tee -a "$EVIDENCE_ROOT/$log_name"
+  echo "[run] $cli_cmd" | tee -a "$EVIDENCE_ROOT/$log_name"
   script -q -e -c "npm run cli -- $cli_cmd" /dev/null | tee -a "$EVIDENCE_ROOT/$log_name"
 }
 
@@ -321,7 +344,7 @@ append_tx_log() {
   local log_name="$1"
   shift
   local cli_cmd="$*"
-  echo "[rerun] $cli_cmd" | tee -a "$EVIDENCE_ROOT/$log_name"
+  echo "[run] $cli_cmd" | tee -a "$EVIDENCE_ROOT/$log_name"
   script -q -e -c "npm run cli -- $cli_cmd" /dev/null | tee -a "$EVIDENCE_ROOT/$log_name"
   if [[ "$POST_TX_DELAY_SECONDS" -gt 0 ]]; then
     sleep "$POST_TX_DELAY_SECONDS"
@@ -337,7 +360,7 @@ generate_signed_intent_now() {
   symbol="$(pair_symbol "$slug")"
 
   append_cli_log "$log_name" \
-    "preview:intent:create-and-sign --state $STATE_REL/config-bootstrap.json --intent-type OracleUpdate --symbol $symbol --price $price --source \"$DOMAIN_NAME\" --out $STATE_REL/intents/${slug}${suffix}.signed.json"
+    "intent:create-and-sign --state $STATE_REL/config-bootstrap.json --intent-type OracleUpdate --symbol $symbol --price $price --source \"$DOMAIN_NAME\" --out $STATE_REL/intents/${slug}${suffix}.signed.json"
 }
 
 generate_batch_signed_intents_now() {
@@ -370,7 +393,7 @@ write_batch_manifest() {
     done
     printf '\n  ]\n}\n'
   } > "$manifest_path"
-  echo "[rerun] wrote $(basename "$manifest_path") with ${size} updates" | tee -a "$EVIDENCE_ROOT/24a-generate-batch-manifests.log"
+  echo "[run] wrote $(basename "$manifest_path") with ${size} updates" | tee -a "$EVIDENCE_ROOT/24a-generate-batch-manifests.log"
 }
 
 infer_success_batch_size() {
@@ -385,7 +408,7 @@ infer_success_batch_size() {
 }
 
 WALLET_DEFAULTS_JSON_PATH="$EVIDENCE_ROOT/00-wallet-defaults.json"
-capture_cli_json "00-wallet-defaults.log" "preview:wallet:defaults" > "$WALLET_DEFAULTS_JSON_PATH"
+capture_cli_json "00-wallet-defaults.log" "wallet:defaults" > "$WALLET_DEFAULTS_JSON_PATH"
 CONFIG_SIGNER_PKH="$(read_json_field "$WALLET_DEFAULTS_JSON_PATH" "defaults.paymentKeyHash")"
 PAYMENT_HOOK_WITHDRAW_ADDRESS="$(read_json_field "$WALLET_DEFAULTS_JSON_PATH" "address")"
 
@@ -458,130 +481,130 @@ NODE
 
 # Run contract and node tests first — always, on every full run and resume.
 # Logs are saved to the evidence directory so failures are captured as evidence.
-echo "[rerun] running contracts tests (aiken check)"
+echo "[run] running contracts tests (aiken check)"
 bash "$SCRIPT_DIR/run-contracts-tests.sh" --evidence-dir "$EVIDENCE_ROOT"
-echo "[rerun] running node tests (npm test)"
+echo "[run] running node tests (npm test)"
 bash "$SCRIPT_DIR/run-node-tests.sh" --evidence-dir "$EVIDENCE_ROOT"
 
 # Capture initial wallet balance before any transaction. Only on a fresh full run;
 # on --from-step resumes the file already exists from the original run.
 if (( FROM_STEP == 1 )); then
-  capture_cli_json "00b-wallet-initial.json" preview:wallet:utxos
+  capture_cli_json "00b-wallet-initial.json" wallet:utxos
 fi
 
 if should_run_step 1; then
   run_cli_logged "01-protocol-init.log" \
-    "preview:protocol:init --valid-config-signers $CONFIG_SIGNER_PKH --authorized-dia-public-keys $AUTHORIZED_DIA_PUBLIC_KEY --domain-name \"$DOMAIN_NAME\" --domain-version $DOMAIN_VERSION --domain-source-chain-id $DOMAIN_SOURCE_CHAIN_ID --domain-verifying-contract $DOMAIN_VERIFYING_CONTRACT --base-fee-lovelace $BASE_FEE_LOVELACE --per-pair-fee-lovelace $PER_PAIR_FEE_LOVELACE --max-bootstrap-drift-seconds $MAX_BOOTSTRAP_DRIFT_SECONDS --min-utxo-lovelace $CONFIG_MIN_UTXO_LOVELACE --config-asset-label $CONFIG_ASSET_LABEL --payment-hook-asset-label $PAYMENT_HOOK_ASSET_LABEL --payment-hook-withdraw-address $PAYMENT_HOOK_WITHDRAW_ADDRESS --out $STATE_REL/config-bootstrap.json"
+    "protocol:init --valid-config-signers $CONFIG_SIGNER_PKH --authorized-dia-public-keys $AUTHORIZED_DIA_PUBLIC_KEY --domain-name \"$DOMAIN_NAME\" --domain-version $DOMAIN_VERSION --domain-source-chain-id $DOMAIN_SOURCE_CHAIN_ID --domain-verifying-contract $DOMAIN_VERIFYING_CONTRACT --base-fee-lovelace $BASE_FEE_LOVELACE --per-pair-fee-lovelace $PER_PAIR_FEE_LOVELACE --max-bootstrap-drift-seconds $MAX_BOOTSTRAP_DRIFT_SECONDS --min-utxo-lovelace $CONFIG_MIN_UTXO_LOVELACE --config-asset-label $CONFIG_ASSET_LABEL --payment-hook-asset-label $PAYMENT_HOOK_ASSET_LABEL --payment-hook-withdraw-address $PAYMENT_HOOK_WITHDRAW_ADDRESS --out $STATE_REL/config-bootstrap.json"
 fi
 
 if should_run_step 2; then
   run_cli_logged "02-config-parameterize.log" \
-    "preview:config:parameterize --state $STATE_REL/config-bootstrap.json"
+    "config:parameterize --state $STATE_REL/config-bootstrap.json"
 fi
 if should_run_step 3; then
   run_tx_logged "03-config-bootstrap.log" \
-    "preview:config:bootstrap --state $STATE_REL/config-bootstrap.json"
+    "config:bootstrap --state $STATE_REL/config-bootstrap.json"
 fi
 if should_run_step 4; then
   run_tx_logged "04-config-reference-scripts.log" \
-    "preview:config:reference-scripts --state $STATE_REL/config-bootstrap.json"
+    "config:reference-scripts --state $STATE_REL/config-bootstrap.json"
 fi
 
 if should_run_step 5; then
   run_cli_logged "05-payment-hook-parameterize.log" \
-    "preview:payment-hook:parameterize --state $STATE_REL/config-bootstrap.json"
+    "payment-hook:parameterize --state $STATE_REL/config-bootstrap.json"
 fi
 if should_run_step 6; then
   run_tx_logged "06-payment-hook-bootstrap.log" \
-    "preview:payment-hook:bootstrap --state $STATE_REL/config-bootstrap.json"
+    "payment-hook:bootstrap --state $STATE_REL/config-bootstrap.json"
 fi
 if should_run_step 7; then
   run_tx_logged "07-payment-hook-reference-script.log" \
-    "preview:payment-hook:reference-script --state $STATE_REL/config-bootstrap.json"
+    "payment-hook:reference-script --state $STATE_REL/config-bootstrap.json"
 fi
 
 if should_run_step 8; then
   run_cli_logged "08-client-init.log" \
-    "preview:client:init --state $STATE_REL/config-bootstrap.json --client-id $CLIENT_ID --receiver-asset-label $RECEIVER_ASSET_LABEL --out $STATE_REL/clients/${CLIENT_ID}.json"
+    "client:init --state $STATE_REL/config-bootstrap.json --client-id $CLIENT_ID --receiver-asset-label $RECEIVER_ASSET_LABEL --out $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 
 if should_run_step 9; then
   run_cli_logged "09-receiver-parameterize.log" \
-    "preview:receiver:parameterize --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "receiver:parameterize --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 if should_run_step 10; then
   run_tx_logged "10-receiver-bootstrap.log" \
-    "preview:receiver:bootstrap --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "receiver:bootstrap --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 if should_run_step 11; then
   run_tx_logged "11-client-reference-scripts.log" \
-    "preview:reference-scripts:publish-client --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "reference-scripts:publish-client --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 
 if should_run_step 12; then
   run_tx_logged "12-receiver-top-up.log" \
-    "preview:receiver:top-up --amount-lovelace $RECEIVER_TOP_UP_1_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "receiver:top-up --amount-lovelace $RECEIVER_TOP_UP_1_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 
 if should_run_step 13; then
   generate_signed_intent_now "13a-generate-usdc-usd-intent.log" "usdc-usd" "" "$(bootstrap_price "usdc-usd")"
   run_tx_logged "13-update-usdc-bootstrap.log" \
-    "preview:update --intent $STATE_REL/intents/usdc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdc-usd.json"
+    "update --intent $STATE_REL/intents/usdc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdc-usd.json"
 fi
 if should_run_step 14; then
   generate_signed_intent_now "14a-generate-btc-usd-intent.log" "btc-usd" "" "$(bootstrap_price "btc-usd")"
   run_tx_logged "14-bootstrap-btc-usd.log" \
-    "preview:update --intent $STATE_REL/intents/btc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/btc-usd.json"
+    "update --intent $STATE_REL/intents/btc-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/btc-usd.json"
 fi
 if should_run_step 15; then
   generate_signed_intent_now "15a-generate-eth-usd-intent.log" "eth-usd" "" "$(bootstrap_price "eth-usd")"
   run_tx_logged "15-bootstrap-eth-usd.log" \
-    "preview:update --intent $STATE_REL/intents/eth-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/eth-usd.json"
+    "update --intent $STATE_REL/intents/eth-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/eth-usd.json"
 fi
 if should_run_step 16; then
   generate_signed_intent_now "16a-generate-ada-usd-intent.log" "ada-usd" "" "$(bootstrap_price "ada-usd")"
   run_tx_logged "16-bootstrap-ada-usd.log" \
-    "preview:update --intent $STATE_REL/intents/ada-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/ada-usd.json"
+    "update --intent $STATE_REL/intents/ada-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/ada-usd.json"
 fi
 if should_run_step 17; then
   generate_signed_intent_now "17a-generate-usdt-usd-intent.log" "usdt-usd" "" "$(bootstrap_price "usdt-usd")"
   run_tx_logged "17-bootstrap-usdt-usd.log" \
-    "preview:update --intent $STATE_REL/intents/usdt-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdt-usd.json"
+    "update --intent $STATE_REL/intents/usdt-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/usdt-usd.json"
 fi
 if should_run_step 18; then
   generate_signed_intent_now "18a-generate-dai-usd-intent.log" "dai-usd" "" "$(bootstrap_price "dai-usd")"
   run_tx_logged "18-bootstrap-dai-usd.log" \
-    "preview:update --intent $STATE_REL/intents/dai-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dai-usd.json"
+    "update --intent $STATE_REL/intents/dai-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dai-usd.json"
 fi
 if should_run_step 19; then
   generate_signed_intent_now "19a-generate-sol-usd-intent.log" "sol-usd" "" "$(bootstrap_price "sol-usd")"
   run_tx_logged "19-bootstrap-sol-usd.log" \
-    "preview:update --intent $STATE_REL/intents/sol-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/sol-usd.json"
+    "update --intent $STATE_REL/intents/sol-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/sol-usd.json"
 fi
 if should_run_step 20; then
   generate_signed_intent_now "20a-generate-bnb-usd-intent.log" "bnb-usd" "" "$(bootstrap_price "bnb-usd")"
   run_tx_logged "20-bootstrap-bnb-usd.log" \
-    "preview:update --intent $STATE_REL/intents/bnb-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/bnb-usd.json"
+    "update --intent $STATE_REL/intents/bnb-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/bnb-usd.json"
 fi
 if should_run_step 21; then
   generate_signed_intent_now "21a-generate-xrp-usd-intent.log" "xrp-usd" "" "$(bootstrap_price "xrp-usd")"
   run_tx_logged "21-bootstrap-xrp-usd.log" \
-    "preview:update --intent $STATE_REL/intents/xrp-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/xrp-usd.json"
+    "update --intent $STATE_REL/intents/xrp-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/xrp-usd.json"
 fi
 if should_run_step 22; then
   generate_signed_intent_now "22a-generate-matic-usd-intent.log" "matic-usd" "" "$(bootstrap_price "matic-usd")"
   run_tx_logged "22-bootstrap-matic-usd.log" \
-    "preview:update --intent $STATE_REL/intents/matic-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/matic-usd.json"
+    "update --intent $STATE_REL/intents/matic-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/matic-usd.json"
 fi
 if should_run_step 23; then
   generate_signed_intent_now "23a-generate-dot-usd-intent.log" "dot-usd" "" "$(bootstrap_price "dot-usd")"
   run_tx_logged "23-bootstrap-dot-usd.log" \
-    "preview:update --intent $STATE_REL/intents/dot-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dot-usd.json"
+    "update --intent $STATE_REL/intents/dot-usd.signed.json --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/dot-usd.json"
 fi
 
 if should_run_step 24; then
   run_tx_logged "24-receiver-top-up-2.log" \
-    "preview:receiver:top-up --amount-lovelace $RECEIVER_TOP_UP_2_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "receiver:top-up --amount-lovelace $RECEIVER_TOP_UP_2_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 
 if should_run_step 25; then
@@ -597,12 +620,12 @@ if should_run_step 25; then
     result_root="$STATE_ROOT/update-batches/batch-${size}.result.json"
     rm -f "$result_root"
     if run_tx_logged "$log_name" \
-      "preview:update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-${size}.manifest.json --out $STATE_REL/update-batches/batch-${size}.result.json"; then
+      "update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-${size}.manifest.json --out $STATE_REL/update-batches/batch-${size}.result.json"; then
       if [[ -s "$result_root" ]]; then
         SUCCESS_BATCH_SIZE="$size"
         break
       fi
-      echo "[rerun] batch-$size did not produce a result artifact; treating it as a failed attempt" | tee -a "$EVIDENCE_ROOT/$log_name"
+      echo "[run] batch-$size did not produce a result artifact; treating it as a failed attempt" | tee -a "$EVIDENCE_ROOT/$log_name"
     fi
   done
 
@@ -610,9 +633,9 @@ if should_run_step 25; then
     result_root="$STATE_ROOT/update-batches/batch-5.result.json"
     rm -f "$result_root"
     run_tx_logged "25-update-batch-5.log" \
-      "preview:update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-5.manifest.json --out $STATE_REL/update-batches/batch-5.result.json"
+      "update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-5.manifest.json --out $STATE_REL/update-batches/batch-5.result.json"
     if [[ ! -s "$result_root" ]]; then
-      echo "[rerun] batch-5 did not produce a result artifact; aborting rerun" | tee -a "$EVIDENCE_ROOT/25-update-batch-5.log"
+      echo "[run] batch-5 did not produce a result artifact; aborting run" | tee -a "$EVIDENCE_ROOT/25-update-batch-5.log"
       exit 1
     fi
     SUCCESS_BATCH_SIZE="5"
@@ -631,24 +654,24 @@ fi
 
 if should_run_step 26; then
   run_tx_logged "26-settle.log" \
-    "preview:settle --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json"
+    "settle --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 if should_run_step 27; then
   run_tx_logged "27-receiver-withdraw.log" \
-    "preview:receiver:withdraw --amount-lovelace $RECEIVER_WITHDRAW_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
+    "receiver:withdraw --amount-lovelace $RECEIVER_WITHDRAW_LOVELACE --protocol-state $STATE_REL/config-bootstrap.json --state $STATE_REL/clients/${CLIENT_ID}.json"
 fi
 if should_run_step 28; then
   run_tx_logged "28-payment-hook-withdraw.log" \
-    "preview:payment-hook:withdraw --amount-lovelace $PAYMENT_HOOK_WITHDRAW_LOVELACE --state $STATE_REL/config-bootstrap.json"
+    "payment-hook:withdraw --amount-lovelace $PAYMENT_HOOK_WITHDRAW_LOVELACE --state $STATE_REL/config-bootstrap.json"
 fi
 
 if should_run_step 29; then
   run_tx_logged "29-reclaim-payment-hook-reference-script.log" \
-    "preview:reclaim-reference-script --script payment-hook --state $STATE_REL/config-bootstrap.json"
+    "reclaim-reference-script --script payment-hook --state $STATE_REL/config-bootstrap.json"
 fi
 if should_run_step 30; then
   run_tx_logged "30-republish-payment-hook-reference-script.log" \
-    "preview:payment-hook:reference-script --state $STATE_REL/config-bootstrap.json"
+    "payment-hook:reference-script --state $STATE_REL/config-bootstrap.json"
 fi
 
 # Step 31: admin-gated burn of one Pair NFT. Pairs DOT/USD on purpose because
@@ -661,7 +684,7 @@ fi
 BURN_PAIR_SLUG="dot-usd"
 if should_run_step 31; then
   run_tx_logged "31-pair-burn-${BURN_PAIR_SLUG}.log" \
-    "preview:pair:burn --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/${BURN_PAIR_SLUG}.json"
+    "pair:burn --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --state $STATE_REL/clients/${CLIENT_ID}/pairs/${BURN_PAIR_SLUG}.json"
 fi
 
 STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" BURN_PAIR_SLUG="$BURN_PAIR_SLUG" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-summary-build.log" 2>&1
@@ -684,13 +707,15 @@ const pairFiles = (await readdir(pairsDir)).filter((name) => name.endsWith(".jso
 const pairs = {};
 // Pair burn keeps `pairState` populated for audit (only `datum.pairCbor` is
 // cleared by pair-burn.ts), so we detect a burn by looking for a
-// `preview:pair:burn` entry in the pair's transactions log. Downstream math
+// `pair:burn` entry in the pair's transactions log. Downstream math
 // (locked-ADA totals, evidence markdown) MUST exclude burned pairs.
 let burnedCount = 0;
 for (const fileName of pairFiles) {
   const pair = JSON.parse(await readFile(path.join(pairsDir, fileName), "utf8"));
   const txs = pair.transactions ?? [];
-  const burnRec = txs.find((t) => t && t.step === "preview:pair:burn");
+  // The `step` field is network-tagged ("preview:pair:burn" / "mainnet:pair:burn"),
+  // so match by suffix to work on both.
+  const burnRec = txs.find((t) => t && typeof t.step === "string" && t.step.endsWith(":pair:burn"));
   if (burnRec) {
     burnedCount += 1;
     pair.burned = true;
@@ -727,10 +752,10 @@ console.log(`wrote SUMMARY.json with ${pairFiles.length} pair states (${burnedCo
 NODE
 
 # Capture final wallet balance after all transactions
-capture_cli_json "30a-wallet-final.json" preview:wallet:utxos
+capture_cli_json "30a-wallet-final.json" wallet:utxos
 
 # Generate the full evidence markdown from all collected data
-STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" RUN_ID="$RUN_ID" EVIDENCE_NAME="$EVIDENCE_NAME" BURN_PAIR_SLUG="$BURN_PAIR_SLUG" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-evidence-build.log" 2>&1
+STATE_ROOT="$STATE_ROOT" EVIDENCE_ROOT="$EVIDENCE_ROOT" SUCCESS_BATCH_SIZE="$SUCCESS_BATCH_SIZE" CLIENT_ID="$CLIENT_ID" RUN_ID="$RUN_ID" EVIDENCE_NAME="$EVIDENCE_NAME" BURN_PAIR_SLUG="$BURN_PAIR_SLUG" NETWORK_TAG="$NETWORK_TAG" CARDANO_NETWORK="$CARDANO_NETWORK" node --input-type=module <<'NODE' > "$EVIDENCE_ROOT/30-evidence-build.log" 2>&1
 import { readdir, readFile, writeFile, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -741,6 +766,9 @@ const clientId    = process.env.CLIENT_ID;
 const runId       = process.env.RUN_ID;
 const evidenceName = process.env.EVIDENCE_NAME;
 const burnPairSlug = process.env.BURN_PAIR_SLUG ?? "";
+const networkTag  = (process.env.NETWORK_TAG ?? "preview").toLowerCase();
+const networkName = process.env.CARDANO_NETWORK ?? "Preview";
+const isMainnet   = networkTag === "mainnet";
 if (!stateRoot || !evidenceRoot || !clientId || !runId || !evidenceName) {
   throw new Error("Missing evidence build environment variables.");
 }
@@ -835,35 +863,35 @@ const walletAddress   = (() => { try { return JSON.parse(walletInitialRaw).addre
 // ── load log files and extract fees ───────────────────────────────────────
 
 const STEPS = [
-  { log: "03-config-bootstrap.log",                     label: "`preview:config:bootstrap`",                          tx: true },
-  { log: "04-config-reference-scripts.log",             label: "`preview:config:reference-scripts` (Config+Coordinator)", tx: true },
-  { log: "06-payment-hook-bootstrap.log",               label: "`preview:payment-hook:bootstrap`",                    tx: true },
-  { log: "07-payment-hook-reference-script.log",        label: "`preview:payment-hook:reference-script`",             tx: true },
-  { log: "10-receiver-bootstrap.log",                   label: "`preview:receiver:bootstrap`",                        tx: true },
-  { log: "11-client-reference-scripts.log",             label: "`preview:reference-scripts:publish-client` (Receiver+Pair+PairMint)", tx: true },
-  { log: "12-receiver-top-up.log",                      label: "`preview:receiver:top-up` (top-up 1)",                tx: true },
-  { log: "13-update-usdc-bootstrap.log",                label: "`preview:update` — USDC/USD create",                  tx: true },
-  { log: "14-bootstrap-btc-usd.log",                    label: "`preview:update` — BTC/USD create",                   tx: true },
-  { log: "15-bootstrap-eth-usd.log",                    label: "`preview:update` — ETH/USD create",                   tx: true },
-  { log: "16-bootstrap-ada-usd.log",                    label: "`preview:update` — ADA/USD create",                   tx: true },
-  { log: "17-bootstrap-usdt-usd.log",                   label: "`preview:update` — USDT/USD create",                  tx: true },
-  { log: "18-bootstrap-dai-usd.log",                    label: "`preview:update` — DAI/USD create",                   tx: true },
-  { log: "19-bootstrap-sol-usd.log",                    label: "`preview:update` — SOL/USD create",                   tx: true },
-  { log: "20-bootstrap-bnb-usd.log",                    label: "`preview:update` — BNB/USD create",                   tx: true },
-  { log: "21-bootstrap-xrp-usd.log",                    label: "`preview:update` — XRP/USD create",                   tx: true },
-  { log: "22-bootstrap-matic-usd.log",                  label: "`preview:update` — MATIC/USD create",                 tx: true },
-  { log: "23-bootstrap-dot-usd.log",                    label: "`preview:update` — DOT/USD create",                   tx: true },
-  { log: "24-receiver-top-up-2.log",                    label: "`preview:receiver:top-up` (top-up 2)",                tx: true },
-  { log: `25-update-batch-${successBatchSize}.log`,     label: `\`preview:update:batch\` (${successBatchSize} pairs)`, tx: true },
-  { log: "26-settle.log",                               label: "`preview:settle`",                                    tx: true },
-  { log: "27-receiver-withdraw.log",                    label: "`preview:receiver:withdraw`",                         tx: true },
-  { log: "28-payment-hook-withdraw.log",                label: "`preview:payment-hook:withdraw`",                     tx: true },
-  { log: "29-reclaim-payment-hook-reference-script.log",label: "`preview:reclaim-reference-script --script payment-hook`", tx: true },
-  { log: "30-republish-payment-hook-reference-script.log",label: "`preview:payment-hook:reference-script` (republish)", tx: true },
+  { log: "03-config-bootstrap.log",                     label: "`config:bootstrap`",                          tx: true },
+  { log: "04-config-reference-scripts.log",             label: "`config:reference-scripts` (Config+Coordinator)", tx: true },
+  { log: "06-payment-hook-bootstrap.log",               label: "`payment-hook:bootstrap`",                    tx: true },
+  { log: "07-payment-hook-reference-script.log",        label: "`payment-hook:reference-script`",             tx: true },
+  { log: "10-receiver-bootstrap.log",                   label: "`receiver:bootstrap`",                        tx: true },
+  { log: "11-client-reference-scripts.log",             label: "`reference-scripts:publish-client` (Receiver+Pair+PairMint)", tx: true },
+  { log: "12-receiver-top-up.log",                      label: "`receiver:top-up` (top-up 1)",                tx: true },
+  { log: "13-update-usdc-bootstrap.log",                label: "`update` — USDC/USD create",                  tx: true },
+  { log: "14-bootstrap-btc-usd.log",                    label: "`update` — BTC/USD create",                   tx: true },
+  { log: "15-bootstrap-eth-usd.log",                    label: "`update` — ETH/USD create",                   tx: true },
+  { log: "16-bootstrap-ada-usd.log",                    label: "`update` — ADA/USD create",                   tx: true },
+  { log: "17-bootstrap-usdt-usd.log",                   label: "`update` — USDT/USD create",                  tx: true },
+  { log: "18-bootstrap-dai-usd.log",                    label: "`update` — DAI/USD create",                   tx: true },
+  { log: "19-bootstrap-sol-usd.log",                    label: "`update` — SOL/USD create",                   tx: true },
+  { log: "20-bootstrap-bnb-usd.log",                    label: "`update` — BNB/USD create",                   tx: true },
+  { log: "21-bootstrap-xrp-usd.log",                    label: "`update` — XRP/USD create",                   tx: true },
+  { log: "22-bootstrap-matic-usd.log",                  label: "`update` — MATIC/USD create",                 tx: true },
+  { log: "23-bootstrap-dot-usd.log",                    label: "`update` — DOT/USD create",                   tx: true },
+  { log: "24-receiver-top-up-2.log",                    label: "`receiver:top-up` (top-up 2)",                tx: true },
+  { log: `25-update-batch-${successBatchSize}.log`,     label: `\`update:batch\` (${successBatchSize} pairs)`, tx: true },
+  { log: "26-settle.log",                               label: "`settle`",                                    tx: true },
+  { log: "27-receiver-withdraw.log",                    label: "`receiver:withdraw`",                         tx: true },
+  { log: "28-payment-hook-withdraw.log",                label: "`payment-hook:withdraw`",                     tx: true },
+  { log: "29-reclaim-payment-hook-reference-script.log",label: "`reclaim-reference-script --script payment-hook`", tx: true },
+  { log: "30-republish-payment-hook-reference-script.log",label: "`payment-hook:reference-script` (republish)", tx: true },
   ...(burnPairSlug
     ? [{
         log:   `31-pair-burn-${burnPairSlug}.log`,
-        label: `\`preview:pair:burn\` — ${burnSymbolLabel} burn (admin-gated)`,
+        label: `\`pair:burn\` — ${burnSymbolLabel} burn (admin-gated)`,
         tx:    true,
       }]
     : []),
@@ -926,7 +954,7 @@ const receiverLockedLovelace = receiverState
 // only). Skip them so the reconciliation initial = final + fees + locked stays
 // accurate. Detection mirrors the SUMMARY.json builder above.
 const isPairBurned = (p) =>
-  (p?.transactions ?? []).some((t) => t && t.step === "preview:pair:burn");
+  (p?.transactions ?? []).some((t) => t && typeof t.step === "string" && t.step.endsWith(":pair:burn"));
 const burnedPairCount = Object.values(pairs).filter(isPairBurned).length;
 const livePairCount   = Object.values(pairs).length - burnedPairCount;
 const pairLockedLovelace = Object.values(pairs).reduce(
@@ -946,7 +974,9 @@ const netLockedCheck = initialLovelace != null && finalLovelace != null
 // ── build tx table rows ───────────────────────────────────────────────────
 
 function cexLink(hash) {
-  return `https://preview.cexplorer.io/tx/${hash}`;
+  return isMainnet
+    ? `https://cexplorer.io/tx/${hash}`
+    : `https://preview.cexplorer.io/tx/${hash}`;
 }
 
 function txRow(label, txHash, feeAda, logFile) {
@@ -999,7 +1029,7 @@ function reasonLabel(over) {
   return `execution budget exceeded — Mem ${over.mem} CPU ${over.cpu} — not submitted`;
 }
 const batchAttemptRows = batchAttemptReasons.map(({ sz, logName, over }) =>
-  `| \`preview:update:batch\` (${sz} pairs, attempted) | *(${reasonLabel(over)})* | 0 ADA | [\`${logName}\`](./${logName}) |`,
+  `| \`update:batch\` (${sz} pairs, attempted) | *(${reasonLabel(over)})* | 0 ADA | [\`${logName}\`](./${logName}) |`,
 );
 
 // Decide the binding dimension for the narrative based on the captured
@@ -1060,15 +1090,15 @@ const explorerRows = explorerSteps
     `| ${label} | \`${step.txHash}\` | [CExplorer](${cexLink(step.txHash)}) |`
   );
 
-const md = `# Milestone 1 Preview Evidence
+const md = `# Milestone 1 ${networkName} Evidence
 
 Source of truth: [\`final-cardano-milestones.md\`](../../final-cardano-milestones.md).
 
-Scope: Milestone 1 validation on Cardano Preview. Cardano mainnet deployment and final mainnet evidence are not included here.
+Scope: Milestone 1 validation on Cardano ${networkName}.
 
 Verification date: **${verificationDate}** (chain walk + local tooling, current bytecode).
 
-Network: Cardano Preview.
+Network: Cardano ${networkName}.
 
 Evidence pack location: [\`docs/milestones/evidence/${evidenceName}/\`](./) — captured logs for every CLI step plus \`SUMMARY.json\` with the final on-chain state.
 
@@ -1078,36 +1108,36 @@ Evidence pack location: [\`docs/milestones/evidence/${evidenceName}/\`](./) — 
 | --- | --- |
 | Aiken oracle smart contract ported to Cardano UTxO model | Complete |
 | Compiled contract | Complete: \`contracts/aiken/plutus.json\` |
-| Unit/integration test coverage | \`aiken check\` — unit tests passed; \`offchain/cli\` \`npm run test\` + typecheck + build green. End-to-end Preview chain walk captured below. |
+| Unit/integration test coverage | \`aiken check\` — unit tests passed; \`offchain/cli\` \`npm run test\` + typecheck + build green. End-to-end ${networkName} chain walk captured below. |
 | Deployment scripts | Complete: \`offchain/cli\` runbook and CLI commands |
 | Documentation for Cardano developers | Complete in repository: root README, Aiken README, CLI runbook, architecture document |
-| Verified Cardano mainnet deployment and execution hashes | Pending (mainnet not executed yet — separate gate) |
+| Verified Cardano mainnet deployment and execution hashes | ${isMainnet ? "Complete (captured in this evidence pack)" : "Pending (mainnet not executed yet — separate gate)"} |
 
-## Preview transactions executed end-to-end
+## ${networkName} transactions executed end-to-end
 
-All transactions below were submitted on Cardano Preview and confirmed. The chain walk demonstrates every Milestone 1 protocol surface including **Settle**, **reclaim**, and **republish** of a reference-script UTxO.
+All transactions below were submitted on Cardano ${networkName} and confirmed. The chain walk demonstrates every Milestone 1 protocol surface including **Settle**, **reclaim**, and **republish** of a reference-script UTxO.
 
-The integration exercises **eleven price pairs** (\`USDC/USD\`, \`BTC/USD\`, \`ETH/USD\`, \`ADA/USD\`, \`USDT/USD\`, \`DAI/USD\`, \`SOL/USD\`, \`BNB/USD\`, \`XRP/USD\`, \`MATIC/USD\`, \`DOT/USD\`). All eleven are bootstrapped via individual \`preview:update\` transactions. A subsequent batch transaction updates the first ${successBatchSize} non-USDC pairs in one \`preview:update:batch\` call.
+The integration exercises **eleven price pairs** (\`USDC/USD\`, \`BTC/USD\`, \`ETH/USD\`, \`ADA/USD\`, \`USDT/USD\`, \`DAI/USD\`, \`SOL/USD\`, \`BNB/USD\`, \`XRP/USD\`, \`MATIC/USD\`, \`DOT/USD\`). All eleven are bootstrapped via individual \`update\` transactions. A subsequent batch transaction updates the first ${successBatchSize} non-USDC pairs in one \`update:batch\` call.
 
 ### Protocol bootstrap (one-time)
 
 | Step | Operation | Tx hash | Fee | Log |
 | --- | --- | --- | --- | --- |
-| 1 | \`preview:protocol:init\` | *(local artifact)* | — | [\`01-protocol-init.log\`](./01-protocol-init.log) |
-| 2 | \`preview:config:parameterize\` | *(local artifact)* | — | [\`02-config-parameterize.log\`](./02-config-parameterize.log) |
+| 1 | \`protocol:init\` | *(local artifact)* | — | [\`01-protocol-init.log\`](./01-protocol-init.log) |
+| 2 | \`config:parameterize\` | *(local artifact)* | — | [\`02-config-parameterize.log\`](./02-config-parameterize.log) |
 ${stepData.filter(s => ["03-config-bootstrap.log","04-config-reference-scripts.log"].includes(s.log)).map((s,i) => txRow(`${i+3} | ` + s.label, s.txHash, s.feeAda, s.log)).join("\n")}
-| 5 | \`preview:payment-hook:parameterize\` | *(local artifact)* | — | [\`05-payment-hook-parameterize.log\`](./05-payment-hook-parameterize.log) |
+| 5 | \`payment-hook:parameterize\` | *(local artifact)* | — | [\`05-payment-hook-parameterize.log\`](./05-payment-hook-parameterize.log) |
 ${stepData.filter(s => ["06-payment-hook-bootstrap.log","07-payment-hook-reference-script.log"].includes(s.log)).map((s,i) => txRow(`${i+6} | ` + s.label, s.txHash, s.feeAda, s.log)).join("\n")}
 
 ### Client onboarding (\`${clientId}\`)
 
 | Step | Operation | Tx hash | Fee | Log |
 | --- | --- | --- | --- | --- |
-| 8 | \`preview:client:init\` | *(local artifact)* | — | [\`08-client-init.log\`](./08-client-init.log) |
-| 9 | \`preview:receiver:parameterize\` | *(local artifact)* | — | [\`09-receiver-parameterize.log\`](./09-receiver-parameterize.log) |
+| 8 | \`client:init\` | *(local artifact)* | — | [\`08-client-init.log\`](./08-client-init.log) |
+| 9 | \`receiver:parameterize\` | *(local artifact)* | — | [\`09-receiver-parameterize.log\`](./09-receiver-parameterize.log) |
 ${stepData.filter(s => ["10-receiver-bootstrap.log","11-client-reference-scripts.log","12-receiver-top-up.log"].includes(s.log)).map((s,i) => txRow(`${i+10} | ` + s.label, s.txHash, s.feeAda, s.log)).join("\n")}
 
-### Single-pair pair-create updates — 11 pairs via \`preview:update\`
+### Single-pair pair-create updates — 11 pairs via \`update\`
 
 | Step | Pair | Tx hash | Fee | Log |
 | --- | --- | --- | --- | --- |
@@ -1144,11 +1174,15 @@ ${batchNarrative(batchAttemptReasons, successBatchSize, bindingDimension)}
 ${batchAttemptRows.join("\n")}
 ${stepData.filter(s => s.log === `25-update-batch-${successBatchSize}.log`).map(s => txRow(`25 | ${s.label}`, s.txHash, s.feeAda, s.log)).join("\n")}
 
-### Settle, withdrawals, reclaim + republish reference script
+### Settle, withdrawals, reclaim + republish reference script${burnPairSlug ? `, pair burn` : ""}
 
 | Step | Operation | Tx hash | Fee | Log |
 | --- | --- | --- | --- | --- |
-${stepData.filter(s => ["26-settle.log","27-receiver-withdraw.log","28-payment-hook-withdraw.log","29-reclaim-payment-hook-reference-script.log","30-republish-payment-hook-reference-script.log"].includes(s.log)).map((s,i) => txRow(`${i+26} | ${s.label}`, s.txHash, s.feeAda, s.log)).join("\n")}
+${(() => {
+  const tail = ["26-settle.log","27-receiver-withdraw.log","28-payment-hook-withdraw.log","29-reclaim-payment-hook-reference-script.log","30-republish-payment-hook-reference-script.log"];
+  if (burnPairSlug) tail.push(`31-pair-burn-${burnPairSlug}.log`);
+  return stepData.filter(s => tail.includes(s.log)).map((s, i) => txRow(`${i + 26} | ${s.label}`, s.txHash, s.feeAda, s.log)).join("\n");
+})()}
 
 ## ADA flow summary
 
@@ -1185,7 +1219,7 @@ ${feeTableRows.join("\n")}
 
 ## Final on-chain state
 
-Snapshot from [\`SUMMARY.json\`](./SUMMARY.json) at the end of the Preview chain walk.
+Snapshot from [\`SUMMARY.json\`](./SUMMARY.json) at the end of the ${networkName} chain walk.
 
 ### Script identities (current bytecode)
 
@@ -1216,18 +1250,29 @@ Snapshot from [\`SUMMARY.json\`](./SUMMARY.json) at the end of the Preview chain
 
 ### Pair final prices
 
-| Pair | Final price (scaled) | Updated via |
-| --- | --- | --- |
+Burned pairs are listed separately below — their on-chain Pair NFT no longer
+exists and their UTxO has been spent, so the "live" table reflects only pairs
+still tracked on-chain.
+
+| Pair | Final price (scaled) | Updated via | Status |
+| --- | --- | --- | --- |
 ${Object.entries(pairs).map(([fileName, pairArtifact]) => {
   const sym = PAIR_SYMBOL[fileName] ?? fileName;
   const price = pairArtifact.pairState?.price ?? "—";
-  const txHash = pairArtifact.transactions?.slice(-1)[0]?.submittedTxHash ?? null;
+  const txs = pairArtifact.transactions ?? [];
+  const lastTx = txs.slice(-1)[0];
+  const burned = txs.some((t) => t && typeof t.step === "string" && t.step.endsWith(":pair:burn"));
+  if (burned) {
+    const burnTx = txs.find((t) => t && typeof t.step === "string" && t.step.endsWith(":pair:burn"));
+    return `| ${sym} | \`${price}\` | *burned (tx \`${(burnTx?.submittedTxHash ?? "").slice(0, 16)}…\`)* | burned |`;
+  }
+  const txHash = lastTx?.submittedTxHash ?? null;
   const viaBatch = txHash && batchTxHash && txHash === batchTxHash;
   const via = viaBatch ? `batch (step 25, ${successBatchSize} pairs)` : "single create (step 13–23)";
-  return `| ${sym} | \`${price}\` | ${via} |`;
+  return `| ${sym} | \`${price}\` | ${via} | live |`;
 }).join("\n")}
 
-## Key transaction explorer links (Preview CExplorer)
+## Key transaction explorer links (${networkName} CExplorer)
 
 | Operation | Tx hash | Explorer |
 | --- | --- | --- |
@@ -1240,9 +1285,10 @@ Each DIA \`OracleIntent\` is generated just-in-time from the live chain tip imme
 Step 29–30 demonstrates the full reclaim + republish round-trip for the \`payment-hook\` reference-script UTxO: step 29 spends it back to the admin wallet; step 30 republishes it at a new outRef. This validates that \`reference_holder\` correctly enforces the admin-gated spend (Config signer + Config NFT as reference input).
 `;
 
-const mdPath = path.join(evidenceRoot, "milestone-1-preview-evidence.md");
+const mdFileName = `milestone-1-${networkTag}-evidence.md`;
+const mdPath = path.join(evidenceRoot, mdFileName);
 await writeFile(mdPath, md, "utf8");
-console.log(`wrote milestone-1-preview-evidence.md (${md.length} bytes)`);
+console.log(`wrote ${mdFileName} (${md.length} bytes)`);
 NODE
 
-echo "[rerun] completed; success batch size=$SUCCESS_BATCH_SIZE"
+echo "[run] completed; success batch size=$SUCCESS_BATCH_SIZE"

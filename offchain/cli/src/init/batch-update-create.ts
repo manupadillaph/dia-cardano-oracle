@@ -1,4 +1,5 @@
 import { checkbox, input as promptInput } from "@inquirer/prompts";
+import { networkTag } from "../core/config.js";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 
@@ -43,14 +44,14 @@ export async function createBatchUpdateManifest(args: {
   pairsDir?: string;
   intentsDir?: string;
 }): Promise<BatchUpdateManifest> {
-  const pairsDir = path.resolve(args.pairsDir ?? "./state/preview/clients/client-a/pairs");
-  const intentsDir = path.resolve(args.intentsDir ?? "./state/preview/intents");
+  const pairsDir = path.resolve(args.pairsDir ?? `./state/${networkTag()}/clients/client-a/pairs`);
+  const intentsDir = path.resolve(args.intentsDir ?? `./state/${networkTag()}/intents`);
   const pairFiles = await listJsonFiles(pairsDir);
   if (pairFiles.length === 0) {
     throw new Error(`No pair state JSON files were found in ${pairsDir}.`);
   }
 
-  console.error("[preview:update:batch:create] Select the pair states to include.");
+  console.error("[update:batch:create] Select the pair states to include.");
   const selectedPairFiles = await checkbox({
     message: "Pair state files",
     choices: pairFiles.map((fileName) => ({

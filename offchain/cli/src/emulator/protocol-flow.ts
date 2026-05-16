@@ -269,7 +269,7 @@ export async function runEmulatorProtocolFlow(
     // ── Probe / single-shot phase ───────────────────────────────────
     // Default (probe): walk N = 1, 2, 3, … Each iteration:
     //   1. Generate + sign a bootstrap intent for `PAIR_CATALOG[N-1]`.
-    //   2. Run `preview:update` to create that Pair UTxO.
+    //   2. Run `update` to create that Pair UTxO.
     //   3. Generate fresh batch intents for ALL N created pairs (using
     //      monotone (timestamp, nonce) so the on-chain freshness check
     //      passes regardless of how fast the emulator runs).

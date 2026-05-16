@@ -40,7 +40,7 @@ export async function reclaimProtocolReferenceScript(args: {
 
   if (!state.scripts.referenceHolderAddress) {
     throw new Error(
-      "Reclaim requires config parameterization first (run preview:config:parameterize).",
+      "Reclaim requires config parameterization first (run config:parameterize).",
     );
   }
 
@@ -94,7 +94,7 @@ export async function reclaimProtocolReferenceScript(args: {
     wallet: { source, address: walletAddress },
     referenceScripts: clearGlobalEntry(state.referenceScripts, args.script),
     transactions: appendTransactionRecord(state.transactions, {
-      step: `preview:reclaim-reference-script:${args.script}`,
+      step: `reclaim-reference-script:${args.script}`,
       submittedTxHash,
       confirmed,
     }),
@@ -114,7 +114,7 @@ export async function reclaimClientReferenceScript(args: {
 
   if (!protocolState.scripts.referenceHolderAddress) {
     throw new Error(
-      "Reclaim requires config parameterization first (run preview:config:parameterize).",
+      "Reclaim requires config parameterization first (run config:parameterize).",
     );
   }
 
@@ -122,7 +122,7 @@ export async function reclaimClientReferenceScript(args: {
   for (const { ref, name } of utxoRefs) {
     if (!ref?.txHash) {
       throw new Error(
-        `Reference script '${name}' has not been published yet. Run preview:reference-scripts:publish-client first.`,
+        `Reference script '${name}' has not been published yet. Run reference-scripts:publish-client first.`,
       );
     }
   }
@@ -167,7 +167,7 @@ export async function reclaimClientReferenceScript(args: {
     ...clientState,
     referenceScripts: clearClientEntry(clientState.referenceScripts),
     transactions: appendTransactionRecord(clientState.transactions, {
-      step: `preview:reclaim-reference-script:${args.script}`,
+      step: `reclaim-reference-script:${args.script}`,
       submittedTxHash,
       confirmed,
     }),
@@ -189,7 +189,7 @@ async function connectWallet() {
 function resolveReferenceHolderValidator(state: ConfigStateArtifact): SpendingValidator {
   if (!state.compiledScripts.referenceHolderValidator) {
     throw new Error(
-      "ReferenceHolder compiled script not found. Run preview:config:parameterize first.",
+      "ReferenceHolder compiled script not found. Run config:parameterize first.",
     );
   }
   return spendingValidatorFromCompiledScript(state.compiledScripts.referenceHolderValidator);
@@ -337,5 +337,5 @@ function clearClientEntry(
 }
 
 function reportProgress(script: string, message: string): void {
-  console.error(`[preview:reclaim-reference-script:${script}] ${message}`);
+  console.error(`[reclaim-reference-script:${script}] ${message}`);
 }

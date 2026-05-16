@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId, networkTag } from "../core/config.js";
 
 import {
   scriptHashFromValidator,
@@ -26,10 +27,10 @@ export async function publishConfigReferenceScripts(args: {
   statePath?: string;
   buildOnly: boolean;
 }): Promise<ConfigStateArtifact> {
-  const state = await readConfigState(path.resolve(args.statePath ?? "state/preview/config-bootstrap.json"));
+  const state = await readConfigState(path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`));
 
   if (!state.scripts.referenceHolderAddress) {
-    throw new Error("Config reference-scripts publish requires config parameterization first (run preview:config:parameterize).");
+    throw new Error("Config reference-scripts publish requires config parameterization first (run config:parameterize).");
   }
 
   reportProgress("Connecting to Preview and selecting the configured wallet");
@@ -41,11 +42,11 @@ export async function publishConfigReferenceScripts(args: {
     wallet.getUtxos(),
   ]);
   if (!state.compiledScripts?.configValidator) {
-    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("configValidator compiled script not found. Run config:parameterize first.");
   }
   const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
   if (!state.compiledScripts?.coordinatorValidator) {
-    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("coordinatorValidator compiled script not found. Run config:parameterize first.");
   }
   const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
   const referenceAddress = state.scripts.referenceHolderAddress;
@@ -142,7 +143,7 @@ export async function publishConfigReferenceScripts(args: {
       },
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:config:reference-scripts",
+      step: stepId("config:reference-scripts"),
       submittedTxHash,
       confirmed,
     }),
@@ -150,5 +151,5 @@ export async function publishConfigReferenceScripts(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:config:reference-scripts] ${message}`);
+  console.error(`[config:reference-scripts] ${message}`);
 }

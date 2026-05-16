@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { stepId } from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
@@ -133,12 +134,12 @@ export async function submitBatchOracleUpdate(args: {
   }
   assertOracleUpdateBootstrapRefsResolved(context.protocol.bootstrapRefs);
   if (!context.client.compiledScripts.pairMintPolicy) {
-    throw new Error("pairMintPolicy compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairMintPolicy compiled script not found. Run receiver:parameterize first.");
   }
   const pairMintPolicy = mintingPolicyFromCompiledScript(context.client.compiledScripts.pairMintPolicy);
   const pairPolicyId = policyIdFromMintingPolicy(pairMintPolicy);
   if (!context.client.compiledScripts.pairValidator) {
-    throw new Error("pairValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("pairValidator compiled script not found. Run receiver:parameterize first.");
   }
   const pairValidator = spendingValidatorFromCompiledScript(context.client.compiledScripts.pairValidator);
   const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
@@ -275,7 +276,7 @@ export async function submitBatchOracleUpdate(args: {
   }
 
   if (!state.compiledScripts.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(state.compiledScripts.receiverValidator);
   const receiverValidatorHash = scriptHashFromValidator(receiverValidator);
@@ -284,7 +285,7 @@ export async function submitBatchOracleUpdate(args: {
   }
 
   if (!state.compiledScripts.coordinatorValidator) {
-    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("coordinatorValidator compiled script not found. Run config:parameterize first.");
   }
   const coordinatorValidator = withdrawalValidatorFromCompiledScript(state.compiledScripts.coordinatorValidator);
 
@@ -547,7 +548,7 @@ export async function submitBatchOracleUpdate(args: {
         pairCbor: buildPairDatumCbor(nextPairState),
       },
       transactions: appendTransactionRecord(artifact.transactions, {
-        step: "preview:update:batch",
+        step: stepId("update:batch"),
         submittedTxHash,
         confirmed,
       }),
@@ -579,7 +580,7 @@ export async function submitBatchOracleUpdate(args: {
           receiverCbor: buildReceiverDatumCbor(nextReceiverState),
         },
         transactions: appendTransactionRecord(clientState.transactions, {
-          step: "preview:update:batch",
+          step: stepId("update:batch"),
           submittedTxHash,
           confirmed,
         }),
@@ -603,7 +604,7 @@ export async function submitBatchOracleUpdate(args: {
       pairUnit: artifact.pair.pairUnit,
     })),
     transactions: appendTransactionRecord(undefined, {
-      step: "preview:update:batch",
+      step: stepId("update:batch"),
       submittedTxHash,
       confirmed,
     }),
@@ -611,7 +612,7 @@ export async function submitBatchOracleUpdate(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:update:batch] ${message}`);
+  console.error(`[update:batch] ${message}`);
 }
 
 async function readBatchUpdateInput(inputPath: string): Promise<BatchUpdateInput> {
@@ -661,7 +662,7 @@ export function resolvePairArtifact(
 ): ResolvedPairStateArtifact {
   if (
     !protocolState.paymentHookState ||
-    !hasCompletedStep(protocolState.transactions, "preview:payment-hook:bootstrap")
+    !hasCompletedStep(protocolState.transactions, stepId("payment-hook:bootstrap"))
   ) {
     throw new Error("Batch update requires protocol state after PaymentHook bootstrap.");
   }

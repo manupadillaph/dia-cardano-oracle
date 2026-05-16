@@ -60,7 +60,7 @@ async function promptForReceiverDefaults(
   clientId: string,
   minUtxoLovelace: string,
 ): Promise<ReceiverParameterizeDefaults> {
-  console.error("[preview:client:init] Enter the initial Receiver defaults.");
+  console.error("[client:init] Enter the initial Receiver defaults.");
   const defaults = defaultReceiverParameterizeDefaults(clientId, minUtxoLovelace);
   const resolvedClientId = await promptForText({
     message: "Client id",

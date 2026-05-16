@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId } from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -70,7 +71,7 @@ export async function settleAccruedFees(args: {
   if (
     !protocolState.paymentHookState ||
     !protocolState.bootstrapRefs.paymentHook ||
-    !hasCompletedStep(protocolState.transactions, "preview:payment-hook:bootstrap")
+    !hasCompletedStep(protocolState.transactions, stepId("payment-hook:bootstrap"))
   ) {
     throw new Error("Settle requires protocol state after PaymentHook bootstrap.");
   }
@@ -194,17 +195,17 @@ export async function settleAccruedFees(args: {
 
   // --- Build validators ---
   if (!clientState.compiledScripts?.receiverValidator) {
-    throw new Error("receiverValidator compiled script not found. Run preview:receiver:parameterize first.");
+    throw new Error("receiverValidator compiled script not found. Run receiver:parameterize first.");
   }
   const receiverValidator = spendingValidatorFromCompiledScript(clientState.compiledScripts.receiverValidator);
 
   if (!protocol.compiledScripts?.paymentHookValidator) {
-    throw new Error("paymentHookValidator compiled script not found. Run preview:payment-hook:parameterize first.");
+    throw new Error("paymentHookValidator compiled script not found. Run payment-hook:parameterize first.");
   }
   const paymentHookValidator = spendingValidatorFromCompiledScript(protocol.compiledScripts.paymentHookValidator);
 
   if (!protocol.compiledScripts?.coordinatorValidator) {
-    throw new Error("coordinatorValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("coordinatorValidator compiled script not found. Run config:parameterize first.");
   }
   const coordinatorValidator = withdrawalValidatorFromCompiledScript(protocol.compiledScripts.coordinatorValidator);
 
@@ -360,7 +361,7 @@ export async function settleAccruedFees(args: {
         paymentHookCbor: buildPaymentHookDatumCbor(nextPaymentHookState),
       },
       transactions: appendTransactionRecord(protocolState.transactions, {
-        step: "preview:settle",
+        step: stepId("settle"),
         submittedTxHash,
         confirmed,
       }),
@@ -378,7 +379,7 @@ export async function settleAccruedFees(args: {
         receiverCbor: buildReceiverDatumCbor(nextReceiverState),
       },
       transactions: appendTransactionRecord(clientState.transactions, {
-        step: "preview:settle",
+        step: stepId("settle"),
         submittedTxHash,
         confirmed,
       }),
@@ -396,7 +397,7 @@ export async function settleAccruedFees(args: {
     ],
     totalSettledLovelace: accruedLovelace.toString(),
     transactions: appendTransactionRecord(undefined, {
-      step: "preview:settle",
+      step: stepId("settle"),
       submittedTxHash,
       confirmed,
     }),
@@ -404,5 +405,5 @@ export async function settleAccruedFees(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:settle] ${message}`);
+  console.error(`[settle] ${message}`);
 }

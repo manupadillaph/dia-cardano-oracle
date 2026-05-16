@@ -191,14 +191,14 @@ export async function createPreviewOracleIntent(args: {
   }
 
   console.error(
-    "[preview:intent:create] Using EIP-712 domain from protocol state:",
+    "[intent:create] Using EIP-712 domain from protocol state:",
   );
   console.error(`  name              ${defaults.domain.name}`);
   console.error(`  version           ${defaults.domain.version}`);
   console.error(`  sourceChainId     ${defaults.domain.sourceChainId}`);
   console.error(`  verifyingContract ${defaults.domain.verifyingContract}`);
   console.error(
-    "[preview:intent:create] Enter the OracleIntent fields that change per intent.",
+    "[intent:create] Enter the OracleIntent fields that change per intent.",
   );
 
   const intentType = await promptValue({
@@ -247,7 +247,7 @@ export async function createPreviewOracleIntent(args: {
 }
 
 export async function signPreviewOracleIntentInteractive(): Promise<ReturnType<typeof signPreviewOracleIntentFromInput>> {
-  console.error("[preview:intent:sign] Select the unsigned OracleIntent JSON to sign.");
+  console.error("[intent:sign] Select the unsigned OracleIntent JSON to sign.");
   const inputPath = await promptExistingFilePath();
   const parsedInput = JSON.parse(
     await readFile(path.resolve(inputPath), "utf8"),

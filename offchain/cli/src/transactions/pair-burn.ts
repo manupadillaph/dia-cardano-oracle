@@ -1,4 +1,5 @@
 import path from "node:path";
+import { stepId } from "../core/config.js";
 
 import {
   mintingPolicyFromCompiledScript,
@@ -47,7 +48,7 @@ import {
  * path — no oracle update is being applied.
  *
  * Once confirmed, the on-chain Pair NFT supply for `pair_token_name`
- * drops to zero. A future `preview:update` for the same symbol will
+ * drops to zero. A future `update` for the same symbol will
  * mint a fresh Pair NFT under `MintPairs`, which is itself admin-gated
  * and replay-protected by `PairDatum.nonce`.
  */
@@ -201,14 +202,14 @@ export async function pairBurn(args: {
   // The on-chain Pair UTxO is destroyed. We keep `pairState` in the
   // artifact for audit (last-known price/timestamp/nonce) and clear
   // `datum.pairCbor` so no off-chain caller mistakenly re-submits the
-  // stale datum. A subsequent `preview:update` for the same symbol
+  // stale datum. A subsequent `update` for the same symbol
   // will mint a fresh Pair NFT under `MintPairs` (admin-gated) and
   // rebuild `pairState` from a new signed intent.
   const burnedPair: PairStateArtifact = {
     ...pair,
     datum: { pairCbor: "" },
     transactions: appendTransactionRecord(pair.transactions, {
-      step: "preview:pair:burn",
+      step: stepId("pair:burn"),
       submittedTxHash,
       confirmed,
     }),
@@ -218,5 +219,5 @@ export async function pairBurn(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:pair:burn] ${message}`);
+  console.error(`[pair:burn] ${message}`);
 }

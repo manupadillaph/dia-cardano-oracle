@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { stepId, networkTag } from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
@@ -70,7 +71,7 @@ export async function configUpdate(args: {
 }): Promise<ConfigStateArtifact> {
   reportProgress(`Loading config update input from ${path.resolve(args.inputPath)}`);
   const input = await readConfigUpdateInput(path.resolve(args.inputPath));
-  const statePath = path.resolve(args.statePath ?? "state/preview/config-bootstrap.json");
+  const statePath = path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`);
   reportProgress(`Loading config state from ${statePath}`);
   const state = await readConfigState(statePath);
 
@@ -121,7 +122,7 @@ export async function configUpdate(args: {
     );
 
   if (!state.compiledScripts?.configValidator) {
-    throw new Error("configValidator compiled script not found. Run preview:config:parameterize first.");
+    throw new Error("configValidator compiled script not found. Run config:parameterize first.");
   }
   const configValidator = spendingValidatorFromCompiledScript(state.compiledScripts.configValidator);
 
@@ -207,7 +208,7 @@ export async function configUpdate(args: {
       configCbor: configDatumCbor,
     },
     transactions: appendTransactionRecord(state.transactions, {
-      step: "preview:config:update",
+      step: stepId("config:update"),
       submittedTxHash,
       confirmed,
     }),
@@ -215,7 +216,7 @@ export async function configUpdate(args: {
 }
 
 function reportProgress(message: string): void {
-  console.error(`[preview:config:update] ${message}`);
+  console.error(`[config:update] ${message}`);
 }
 
 async function readConfigUpdateInput(inputPath: string): Promise<ConfigUpdateInput> {
