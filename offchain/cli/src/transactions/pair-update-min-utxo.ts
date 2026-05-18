@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -55,7 +55,7 @@ export async function pairUpdateMinUtxo(args: {
     throw new Error("Pair min_utxo_lovelace must be greater than zero lovelace.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -111,7 +111,7 @@ export async function pairUpdateMinUtxo(args: {
     new Constr(1, [newMinUtxo]) // Index 1 = UpdateMinUtxo; ApplyUpdate is index 0.
   );
 
-  reportProgress("Building Preview pair update-min-utxo transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} pair update-min-utxo transaction`);
 
   const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
     await loadReferenceScriptUtxos(

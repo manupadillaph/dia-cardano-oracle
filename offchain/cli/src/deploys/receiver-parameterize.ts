@@ -1,5 +1,5 @@
 import path from "node:path";
-import { networkTag } from "../core/config.js";
+import { networkTag , getCliConfig} from "../core/config.js";
 
 import {
   makePairStateMintingPolicy,
@@ -40,7 +40,7 @@ export async function parameterizeReceiverScripts(args: {
     throw new Error("Receiver script parameterization requires protocol state after PaymentHook bootstrap.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();

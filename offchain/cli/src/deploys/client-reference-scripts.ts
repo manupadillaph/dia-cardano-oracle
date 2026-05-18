@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 
 import {
   mintingPolicyFromCompiledScript,
@@ -50,7 +50,7 @@ export async function publishClientReferenceScripts(args: {
     );
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -103,7 +103,7 @@ export async function publishClientReferenceScripts(args: {
     `Computed min lovelace for reference-script outputs: receiverValidator=${receiverMinLovelace}, pairValidator=${pairMinLovelace}, pairMintPolicy=${pairMintMinLovelace}`,
   );
 
-  reportProgress("Building Preview client reference-script publish transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} client reference-script publish transaction`);
   const fundingUtxo = selectFundingUtxo(
     latestWalletUtxos,
     [receiver.bootstrapRef],

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -58,7 +58,7 @@ export async function paymentHookBootstrap(args: {
     throw new Error("Config state artifact is missing the selected Config bootstrap reference.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -172,7 +172,7 @@ export async function paymentHookBootstrap(args: {
   const adminUpdateRedeemer = Data.to(new Constr(0, []));
   const mintRedeemer = Data.to(new Constr(0, []));
 
-  reportProgress("Building Preview payment-hook bootstrap transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} payment-hook bootstrap transaction`);
   assertNftBootstrapDestinationIsNotFundingWallet(
     state.scripts.configValidatorAddress,
     walletAddress,

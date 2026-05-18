@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 import { Constr, type OutRef } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
 
@@ -72,7 +72,7 @@ export async function configBootstrap(args: {
     );
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -168,7 +168,7 @@ export async function configBootstrap(args: {
           ),
         ];
 
-  reportProgress("Building Preview config bootstrap transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} config bootstrap transaction`);
   assertNftBootstrapDestinationIsNotFundingWallet(
     configValidatorAddress,
     walletAddress,
@@ -200,7 +200,7 @@ export async function configBootstrap(args: {
     reportProgress(`Unsigned transaction ready: ${unsignedHash}`);
     reportProgress("Signing transaction with the configured wallet");
     const signedTx = await txSignBuilder.sign.withWallet().complete();
-    reportProgress("Submitting transaction to Preview");
+    reportProgress(`Submitting transaction to ${getCliConfig().cardanoNetwork}`);
     submittedTxHash = await signedTx.submit();
     reportProgress(`Submitted transaction hash: ${submittedTxHash}`);
     reportProgress("Waiting for transaction confirmation on Preview");

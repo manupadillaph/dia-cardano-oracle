@@ -1,3 +1,4 @@
+import "./_test-env.js";
 import assert from "node:assert/strict";
 import { Constr, type Data as PlutusData } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
@@ -121,12 +122,31 @@ await runLucidEmulatorHarnessSmokeTests();
 console.log("CLI tests passed");
 
 function testCardanoWalletCreate(): void {
-  const wallet = createWallet();
-  assert.equal(typeof wallet.mnemonic, "string");
-  assert(wallet.address.startsWith("addr_test1"));
-  assertHexString(wallet.paymentKeyHash);
-  assert.equal(wallet.paymentKeyHash.length, 56);
-  assert.equal(wallet.env.CARDANO_WALLET_SEED, wallet.mnemonic);
+  const originalNetwork = process.env.CARDANO_NETWORK;
+  try {
+    for (const [network, addressPrefix] of [
+      ["Preview", "addr_test1"],
+      ["Mainnet", "addr1"],
+    ] as const) {
+      process.env.CARDANO_NETWORK = network;
+      const wallet = createWallet();
+      assert.equal(typeof wallet.mnemonic, "string");
+      assert(
+        wallet.address.startsWith(addressPrefix),
+        `expected ${network} address to start with ${addressPrefix}, got ${wallet.address}`,
+      );
+      assertHexString(wallet.paymentKeyHash);
+      assert.equal(wallet.paymentKeyHash.length, 56);
+      assert.equal(wallet.env.CARDANO_WALLET_SEED, wallet.mnemonic);
+      assert.equal(wallet.env.CARDANO_NETWORK, network);
+    }
+  } finally {
+    if (originalNetwork === undefined) {
+      delete process.env.CARDANO_NETWORK;
+    } else {
+      process.env.CARDANO_NETWORK = originalNetwork;
+    }
+  }
 }
 
 function testEthereumWalletCreate(): void {

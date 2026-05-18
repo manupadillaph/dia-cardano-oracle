@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
@@ -75,7 +75,7 @@ export async function configUpdate(args: {
   reportProgress(`Loading config state from ${statePath}`);
   const state = await readConfigState(statePath);
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -134,7 +134,7 @@ export async function configUpdate(args: {
     lovelace: BigInt(nextConfigState.minUtxoLovelace),
   };
 
-  reportProgress("Building Preview config update transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} config update transaction`);
   let txBuilder = lucid
     .newTx()
     .readFrom(referenceScriptUtxos)

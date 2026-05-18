@@ -197,7 +197,7 @@ export function scriptHashFromValidator(
 }
 
 export function scriptAddressFromValidator(validator: SpendingValidator): string {
-  return validatorToAddress("Preview", validator);
+  return validatorToAddress(getCliConfig().cardanoNetwork, validator);
 }
 
 export function policyIdFromMintingPolicy(policy: MintingPolicy): string {

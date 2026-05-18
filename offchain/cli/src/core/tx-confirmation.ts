@@ -18,6 +18,32 @@ class KoiosServiceDownError extends Error {
   }
 }
 
+// Defaults for the multi-provider confirmation pipeline. Each stage can be
+// independently overridden via env vars when the network is congested:
+//   TX_CONFIRMATION_PRIMARY_TIMEOUT_MS    (default 180_000  = 3 min)
+//   TX_CONFIRMATION_KOIOS_ATTEMPTS        (default 60)
+//   TX_CONFIRMATION_KOIOS_DELAY_MS        (default 3_000)   = 60 × 3 s = 3 min
+//   TX_CONFIRMATION_BLOCKFROST_ATTEMPTS   (default 30)
+//   TX_CONFIRMATION_BLOCKFROST_DELAY_MS   (default 6_000)   = 30 × 6 s = 3 min
+// Total worst-case window with defaults: ~9 minutes across 3 providers.
+const DEFAULT_PRIMARY_TIMEOUT_MS = 180_000;
+const DEFAULT_KOIOS_ATTEMPTS = 60;
+const DEFAULT_KOIOS_DELAY_MS = 3_000;
+const DEFAULT_BLOCKFROST_ATTEMPTS = 30;
+const DEFAULT_BLOCKFROST_DELAY_MS = 6_000;
+
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(
+      `Invalid ${name}=${raw}: expected a positive number of milliseconds or attempts.`,
+    );
+  }
+  return value;
+}
+
 export async function awaitTxConfirmation(args: {
   lucid: AwaitTxLike;
   txHash: string;
@@ -34,33 +60,56 @@ export async function awaitTxConfirmation(args: {
   blockfrostRetryDelayMs?: number;
 }): Promise<boolean> {
   const reportProgress = args.reportProgress ?? (() => undefined);
-  const primaryTimeoutMs = args.primaryTimeoutMs ?? 120_000;
+  const primaryTimeoutMs =
+    args.primaryTimeoutMs ??
+    envNumber("TX_CONFIRMATION_PRIMARY_TIMEOUT_MS", DEFAULT_PRIMARY_TIMEOUT_MS);
   const label = args.label ?? "transaction";
 
-  try {
-    const confirmed = await Promise.race([
-      args.lucid.awaitTx(args.txHash, 3_000),
-      sleep(primaryTimeoutMs).then(() => false),
-    ]);
-    if (confirmed) {
-      reportProgress(`Confirmed by Blockfrost: ${label} ${args.txHash}.`);
-      return true;
-    }
+  // Wrap lucid.awaitTx so that an internal fetch rejection inside Lucid's
+  // polling loop cannot escape as an unhandled rejection. The batch-10
+  // crash in m1-mainnet-20260517-063917 happened because such a rejection
+  // killed the process before any Koios/Blockfrost-REST fallback ran.
+  const primaryConfirmed = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(value);
+      }
+    };
+    Promise.resolve()
+      .then(() => args.lucid.awaitTx(args.txHash, 3_000))
+      .then((ok) => finish(Boolean(ok)))
+      .catch((error) => {
+        reportProgress(
+          `Blockfrost lookup failed for ${args.txHash}; trying Koios (${describeError(error)}).`,
+        );
+        finish(false);
+      });
+    setTimeout(() => {
+      if (!settled) {
+        reportProgress(
+          `Blockfrost did not see ${args.txHash} within ${primaryTimeoutMs}ms; trying Koios.`,
+        );
+      }
+      finish(false);
+    }, primaryTimeoutMs);
+  });
 
-    reportProgress(
-      `Blockfrost did not see ${args.txHash} within ${primaryTimeoutMs}ms; trying Koios.`,
-    );
-  } catch (error) {
-    reportProgress(
-      `Blockfrost lookup failed for ${args.txHash}; trying Koios (${describeError(error)}).`,
-    );
+  if (primaryConfirmed) {
+    reportProgress(`Confirmed by Blockfrost: ${label} ${args.txHash}.`);
+    return true;
   }
 
   const config = getCliConfig();
   const koiosApiUrl = args.koiosApiUrl ?? config.koiosApiUrl;
   const fetchImpl = args.fetchImpl ?? fetch;
-  const maxAttempts = args.koiosMaxAttempts ?? 40;
-  const delayMs = args.koiosDelayMs ?? 3_000;
+  const maxAttempts =
+    args.koiosMaxAttempts ??
+    envNumber("TX_CONFIRMATION_KOIOS_ATTEMPTS", DEFAULT_KOIOS_ATTEMPTS);
+  const delayMs =
+    args.koiosDelayMs ??
+    envNumber("TX_CONFIRMATION_KOIOS_DELAY_MS", DEFAULT_KOIOS_DELAY_MS);
   let lastError: unknown = null;
   let koiosDownCount = 0;
 
@@ -113,8 +162,12 @@ export async function awaitTxConfirmation(args: {
 
   const blockfrostApiUrl = args.blockfrostApiUrl ?? config.blockfrostApiUrl;
   const blockfrostProjectId = args.blockfrostProjectId ?? config.blockfrostProjectId;
-  const bfRetryAttempts = args.blockfrostRetryAttempts ?? 20;
-  const bfRetryDelayMs = args.blockfrostRetryDelayMs ?? 6_000;
+  const bfRetryAttempts =
+    args.blockfrostRetryAttempts ??
+    envNumber("TX_CONFIRMATION_BLOCKFROST_ATTEMPTS", DEFAULT_BLOCKFROST_ATTEMPTS);
+  const bfRetryDelayMs =
+    args.blockfrostRetryDelayMs ??
+    envNumber("TX_CONFIRMATION_BLOCKFROST_DELAY_MS", DEFAULT_BLOCKFROST_DELAY_MS);
 
   reportProgress(
     `Retrying confirmation via Blockfrost REST for ${args.txHash} (up to ${bfRetryAttempts} attempts).`,

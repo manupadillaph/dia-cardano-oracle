@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data } from "@lucid-evolution/plutus";
@@ -62,7 +62,7 @@ export async function paymentHookUpdate(args: {
     throw new Error("PaymentHook update requires a state artifact produced after payment-hook bootstrap.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -117,7 +117,7 @@ export async function paymentHookUpdate(args: {
   const paymentHookDatumCbor = buildPaymentHookDatumCbor(nextPaymentHookState);
   const adminUpdateRedeemer = Data.to(new Constr(1, []));
 
-  reportProgress("Building Preview payment-hook update transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} payment-hook update transaction`);
   const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
     await loadReferenceScriptUtxos(
       [

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -86,7 +86,7 @@ export async function settleAccruedFees(args: {
     throw new Error("Settle requires client state after Receiver bootstrap.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -248,7 +248,7 @@ export async function settleAccruedFees(args: {
     );
 
   // --- Build transaction ---
-  reportProgress("Building Preview settle transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} settle transaction`);
   // Settle does not consume an intent, but the coordinator's
   // ApplySettle path still runs alongside other validators that may
   // require finite bounds (defence in depth). A 30-min window is safe.

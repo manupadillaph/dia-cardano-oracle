@@ -628,31 +628,106 @@ if should_run_step 25; then
     write_batch_manifest "$size"
   done
 
+  # Helpers to classify why a batch attempt failed. We MUST only fall through
+  # to a smaller batch when the node rejected the tx with an *over-budget*
+  # error (Plutus CPU or memory limit). Any other failure — network/RPC
+  # error, validator crash, mempool rejection, unhandled fetch — means
+  # something unexpected happened and the next attempt could very well
+  # submit a tx that wastes ADA against now-spent UTxOs or duplicates a
+  # successful submit. Halt and let the operator inspect.
+  detect_submitted_hash() {
+    local log_path="$1"
+    [[ -f "$log_path" ]] || return 1
+    grep -oE 'Submitted transaction hash: [a-f0-9]{64}' "$log_path" | tail -1 | awk '{print $NF}'
+  }
+  is_over_budget_failure() {
+    local log_path="$1"
+    [[ -f "$log_path" ]] || return 1
+    # The node reports "execution went over budget Mem <delta> CPU <delta>"
+    # when a Plutus script exceeds its protocol budget at tx build / submit
+    # time. Match exactly that phrase to avoid false positives.
+    grep -qE 'over budget Mem -?[0-9]+ CPU -?[0-9]+' "$log_path"
+  }
+
   SUCCESS_BATCH_SIZE=""
-  for size in 10 9 8 7 6; do
+  SUBMITTED_BUT_UNCONFIRMED_HASH=""
+  SUBMITTED_BUT_UNCONFIRMED_SIZE=""
+  HALT_REASON=""
+  HALT_SIZE=""
+  HALT_LOG=""
+  for size in 10 9 8 7 6 5; do
     log_name="25-update-batch-${size}.log"
+    log_path="$EVIDENCE_ROOT/$log_name"
     result_root="$STATE_ROOT/update-batches/batch-${size}.result.json"
     rm -f "$result_root"
-    if run_tx_logged "$log_name" \
-      "update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-${size}.manifest.json --out $STATE_REL/update-batches/batch-${size}.result.json"; then
-      if [[ -s "$result_root" ]]; then
-        SUCCESS_BATCH_SIZE="$size"
-        break
-      fi
-      echo "[run] batch-$size did not produce a result artifact; treating it as a failed attempt" | tee -a "$EVIDENCE_ROOT/$log_name"
+    set +e
+    run_tx_logged "$log_name" \
+      "update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-${size}.manifest.json --out $STATE_REL/update-batches/batch-${size}.result.json"
+    rc=$?
+    set -e
+    if (( rc == 0 )) && [[ -s "$result_root" ]]; then
+      SUCCESS_BATCH_SIZE="$size"
+      break
     fi
+    SUBMITTED_HASH="$(detect_submitted_hash "$log_path" || true)"
+    if [[ -n "$SUBMITTED_HASH" ]]; then
+      # Submitted but result.json missing — confirmation/wait crashed.
+      SUBMITTED_BUT_UNCONFIRMED_HASH="$SUBMITTED_HASH"
+      SUBMITTED_BUT_UNCONFIRMED_SIZE="$size"
+      break
+    fi
+    if is_over_budget_failure "$log_path"; then
+      echo "[run] batch-$size exceeded Plutus execution budget; trying a smaller batch" | tee -a "$log_path"
+      continue
+    fi
+    # Failure was not over-budget and nothing was submitted. Halt — falling
+    # through to batch-(N-1) here would risk submitting again and burning
+    # ADA on a path the operator has not inspected.
+    HALT_REASON="unexpected-failure"
+    HALT_SIZE="$size"
+    HALT_LOG="$log_path"
+    break
   done
 
+  if [[ -n "$SUBMITTED_BUT_UNCONFIRMED_HASH" ]]; then
+    cat >&2 <<EOF
+
+[run] ====================================================================
+[run]  HALT: batch-${SUBMITTED_BUT_UNCONFIRMED_SIZE} was SUBMITTED to the chain but the CLI
+[run]        did not record a result file locally. This usually means the
+[run]        confirmation/wait step crashed (network blip, fetch error).
+[run]
+[run]  Submitted tx hash: ${SUBMITTED_BUT_UNCONFIRMED_HASH}
+[run]
+[run]  DO NOT re-run this step. Verify the tx in a public explorer:
+[run]    Preview: https://preview.cexplorer.io/tx/${SUBMITTED_BUT_UNCONFIRMED_HASH}
+[run]    Mainnet: https://cexplorer.io/tx/${SUBMITTED_BUT_UNCONFIRMED_HASH}
+[run]
+[run]  Inspect the run logs and decide how to resume manually.
+[run] ====================================================================
+EOF
+    exit 1
+  fi
+
+  if [[ -n "$HALT_REASON" ]]; then
+    cat >&2 <<EOF
+
+[run] ====================================================================
+[run]  HALT: batch-${HALT_SIZE} failed with a non-budget error and no tx was
+[run]        submitted. The retry loop will NOT fall through to a smaller
+[run]        batch — smaller batches are only attempted when the node
+[run]        explicitly rejects with "over budget Mem/CPU".
+[run]
+[run]  Inspect the failure log before retrying:
+[run]    ${HALT_LOG}
+[run] ====================================================================
+EOF
+    exit 1
+  fi
+
   if [[ -z "$SUCCESS_BATCH_SIZE" ]]; then
-    result_root="$STATE_ROOT/update-batches/batch-5.result.json"
-    rm -f "$result_root"
-    run_tx_logged "25-update-batch-5.log" \
-      "update:batch --protocol-state $STATE_REL/config-bootstrap.json --client-state $STATE_REL/clients/${CLIENT_ID}.json --manifest $STATE_REL/update-batches/batch-5.manifest.json --out $STATE_REL/update-batches/batch-5.result.json"
-    if [[ ! -s "$result_root" ]]; then
-      echo "[run] batch-5 did not produce a result artifact; aborting run" | tee -a "$EVIDENCE_ROOT/25-update-batch-5.log"
-      exit 1
-    fi
-    SUCCESS_BATCH_SIZE="5"
+    echo "[run] all batch sizes (10..5) exhausted Plutus budget; aborting run" >&2
+    exit 1
   fi
 
   printf '%s\n' "$SUCCESS_BATCH_SIZE" > "$EVIDENCE_ROOT/batch-success-size.txt"

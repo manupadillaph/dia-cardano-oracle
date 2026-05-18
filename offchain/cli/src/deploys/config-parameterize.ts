@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getCliConfig } from "../core/config.js";
 
 import {
   makeConfigStateMintingPolicy,
@@ -39,7 +40,7 @@ export async function parameterizeConfigScripts(args: {
     ? await readConfigState(path.resolve(args.statePath))
     : null;
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();

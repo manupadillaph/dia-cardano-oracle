@@ -2,6 +2,22 @@ import { input as promptInput } from "@inquirer/prompts";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+// Surface unhandled rejections instead of letting Node.js terminate the
+// process with a bare stack trace. Lucid's polling helpers occasionally
+// reject asynchronously after the caller has moved on (network blips against
+// Blockfrost); without this handler such a rejection killed the batch-10
+// run in m1-mainnet-20260517-063917 right after submit, before any
+// confirmation fallback could take over.
+process.on("unhandledRejection", (reason) => {
+  const detail =
+    reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : String(reason);
+  console.error(
+    `[cli] unhandled promise rejection (continuing, transient provider error): ${detail}`,
+  );
+});
+
 import { getCliConfig, networkTag } from "./core/config.js";
 import { signedIntentPathForSymbol } from "./core/intent-paths.js";
 import {

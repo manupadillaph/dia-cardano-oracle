@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -58,7 +58,7 @@ export async function paymentHookWithdraw(args: {
     throw new Error("Payment-hook withdraw requires a state artifact produced after payment-hook bootstrap.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -121,7 +121,7 @@ export async function paymentHookWithdraw(args: {
     new Constr<PlutusData>(2, [amountLovelace]),
   );
 
-  reportProgress("Building Preview payment-hook withdraw transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} payment-hook withdraw transaction`);
   const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
     await loadReferenceScriptUtxos(
       [

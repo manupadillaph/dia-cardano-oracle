@@ -1,5 +1,5 @@
 import path from "node:path";
-import { networkTag } from "../core/config.js";
+import { networkTag , getCliConfig} from "../core/config.js";
 
 import {
   makePaymentHookMintingPolicy,
@@ -31,7 +31,7 @@ export async function parameterizePaymentHookScripts(args: {
   reportProgress("Using PaymentHook values from the protocol artifact");
   const state = await readConfigState(path.resolve(args.statePath ?? `state/${networkTag()}/config-bootstrap.json`));
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();

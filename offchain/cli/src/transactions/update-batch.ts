@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 import path from "node:path";
 import { Constr } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
@@ -181,7 +181,7 @@ export async function submitBatchOracleUpdate(args: {
     throw new Error("Batch update requires pair artifacts produced under the receiver architecture.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -398,7 +398,7 @@ export async function submitBatchOracleUpdate(args: {
     currentPairEntries.map(({ unit, utxo }) => [unit, utxo]),
   );
 
-  reportProgress("Building Preview oracle batch update transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} oracle batch update transaction`);
   // Finite tx validity range required by the on-chain coordinator
   // (intent_expiry_satisfied) and pair_state indexed witness binding.
   // Cap upper bound below the earliest intent expiry in the batch.

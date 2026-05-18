@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 
 import {
   scriptHashFromValidator,
@@ -35,7 +35,7 @@ export async function publishPaymentHookReferenceScript(args: {
     throw new Error("PaymentHook reference-script publish requires config parameterization first (run config:parameterize).");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -67,7 +67,7 @@ export async function publishPaymentHookReferenceScript(args: {
     "payment-hook reference-script publish",
   );
 
-  reportProgress("Building Preview payment-hook reference-script publish transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} payment-hook reference-script publish transaction`);
   const txSignBuilder = await lucid
     .newTx()
     .collectFrom([fundingUtxo])

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 
 import {
   mintingPolicyFromCompiledScript,
@@ -75,7 +75,7 @@ export async function pairBurn(args: {
   const pairValidator = spendingValidatorFromCompiledScript(client.compiledScripts.pairValidator);
   const pairMintPolicy = mintingPolicyFromCompiledScript(client.compiledScripts.pairMintPolicy);
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();

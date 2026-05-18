@@ -1,5 +1,5 @@
 import path from "node:path";
-import { stepId, networkTag } from "../core/config.js";
+import { stepId, networkTag , getCliConfig} from "../core/config.js";
 import { Constr, type UTxO } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
@@ -59,7 +59,7 @@ export async function receiverWithdraw(args: {
     throw new Error("Receiver withdraw requires a client state artifact produced by receiver bootstrap.");
   }
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -122,7 +122,7 @@ export async function receiverWithdraw(args: {
     ]),
   );
 
-  reportProgress("Building Preview receiver withdraw transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} receiver withdraw transaction`);
   const { utxos: referenceScriptUtxos, missing: missingReferenceScript } =
     await loadReferenceScriptUtxos(
       [

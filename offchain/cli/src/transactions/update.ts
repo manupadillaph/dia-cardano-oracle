@@ -1,5 +1,5 @@
 import { unlink } from "node:fs/promises";
-import { stepId } from "../core/config.js";
+import { stepId , getCliConfig} from "../core/config.js";
 import path from "node:path";
 import { confirm } from "@inquirer/prompts";
 import { Constr, type UTxO } from "@lucid-evolution/lucid";
@@ -175,7 +175,7 @@ export async function submitOracleUpdate(args: {
     },
   };
 
-  reportProgress("Connecting to Preview and selecting the configured wallet");
+  reportProgress(`Connecting to ${getCliConfig().cardanoNetwork} and selecting the configured wallet`);
   const lucid = await makeConfiguredLucid();
   const source = await selectConfiguredWallet(lucid);
   const wallet = lucid.wallet();
@@ -361,7 +361,7 @@ export async function submitOracleUpdate(args: {
   const nextPairDatumCbor = buildPairDatumCbor(nextPairState);
   const nextReceiverDatumCbor = buildReceiverDatumCbor(nextReceiverState);
 
-  reportProgress("Building Preview oracle update transaction");
+  reportProgress(`Building ${getCliConfig().cardanoNetwork} oracle update transaction`);
   // The on-chain coordinator and pair_state binding require a finite tx
   // validity range so intent expiry / bootstrap freshness can be evaluated.
   // Cap the upper bound below the signed intent's expiry.
