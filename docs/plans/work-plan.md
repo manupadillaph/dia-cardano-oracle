@@ -7,7 +7,8 @@ Single work plan for the Cardano port of DIA's push-oracle contracts.
 - [Cardano Oracle Architecture](../architecture/cardano-oracle-architecture.md) — single architecture reference.
 - [Cardano Integration Requirement [PF]](../requirements/cardano-integration-requirement-pf.md) — DIA requirement document.
 - [Final Cardano Milestones](../milestones/final-cardano-milestones.md) — Catalyst milestone text.
-- [Milestone 1 Preview Evidence](../milestones/evidence/_archived/m1-preview-20260515-130925/milestone-1-preview-evidence.md) — M1 Preview verification log (latest run).
+- [Milestone 1 Preview Evidence](../milestones/evidence/m1-preview-20260516-090057/milestone-1-preview-evidence.md) — M1 Preview verification log.
+- [Milestone 1 Mainnet Evidence](../milestones/evidence/m1-mainnet-20260517-063917/milestone-1-mainnet-evidence.md) — M1 Mainnet verification log (latest run).
 - [Milestone 2 Feeder Strategy](./milestone-2-feeder-strategy.md) — recommended feeder split, DIA stack glossary, and M2 implementation direction.
 - [Audit report](../audit/) — `audit-report-20260515.md`.
 
