@@ -13,152 +13,156 @@ write-client pipeline, per-key transaction queues, HTTP API for health
 diverges substantively — it builds Cardano txs via the pure builders in
 `offchain/cli/src/lib/` instead of EVM ABI calls.
 
-See [`../../docs/plans/milestone-2-plan.md`](../../docs/plans/milestone-2-plan.md)
-**Phase 3** for the implementation roadmap and **Annex C** for the
-component-by-component mapping to the Spectra Bridge.
-
-## Status
-
-**Phase 3.6 complete — Dockerfile + docker-compose.** All pipeline
-phases are implemented and tested (96 unit tests, 0 failures).
-
-| Phase | Module(s) | Status |
-| ----- | --------- | ------ |
-| 3.1 — source scanner | `src/source/` | ✅ |
-| 3.2 — config + ABI parsing | `src/config/` | ✅ |
-| 3.3 — router + policy gating | `src/router/`, `src/processor/` | ✅ |
-| 3.4 — Cardano write client + queue | `src/submitter/`, `src/lib-bridge/` | ✅ |
-| 3.5 — persistence + HTTP API + metrics | `src/persistence/`, `src/api/` | ✅ |
-| 3.6 — containerisation | `Dockerfile`, `docker-compose.yml` | ✅ |
-
-**What works today:**
-
-- End-to-end scanning, extraction, deduplication, and enrichment
-  against the live DIA testnet (HTTP polling or WebSocket).
-- Router with `eq/neq/in/not_in/gt/lt/contains` conditions and
-  `time_threshold` + `price_deviation` policy gating.
-- Serial per-receiver-UTxO submission queue with in-flight tracking.
-- Pluggable DB (`better-sqlite3` default, `pg` opt-in) via `DATABASE_DRIVER`.
-- HTTP API: `GET /healthz`, `/readyz`, `/metrics`, `/prices`.
-- Prometheus metrics via `prom-client` (opt-in, `METRICS_ENABLED=true`).
-- Two-stage Docker image with healthcheck.
-
-**Pending before production:**
-
-- Wire `RealOracleIntentBridge` in `src/lib-bridge/index.ts` once
-  `@lucid-evolution/lucid` is added as a feeder dependency (or
-  exposed via relative import from `offchain/cli`).
-- Integration test with a live Cardano Preview node.
-- `cmd/feeder/main.ts` daemon entry point that stitches all modules.
-
 ## Usage
 
 ```sh
 cd offchain/feeder
 npm install
 cp .env.example .env
-# fill in the shared values from offchain/cli/.env (see Environment below)
+# fill in secrets from offchain/cli/.env (see Environment below)
 
-# Validate the modular config.
-npm run feeder:dev -- --help
-npm run feeder:dev -- --config ./config --validate-only
+# Validate the modular config and exit.
+npm run feeder:dev -- --validate-only
 
-# Scan the live source registry (HTTP polling).
-npm run feeder:dev -- --config ./config --scan --transport http
+# Scan the live source registry without submitting Cardano txs.
+npm run feeder:dev -- --scan --transport http
+npm run feeder:dev -- --scan --transport ws   # requires DIA_WS_CREDENTIAL_*
 
-# Scan via WebSocket subscription (requires DIA_WS_CREDENTIAL_<network>).
-npm run feeder:dev -- --config ./config --scan --transport ws
-```
+# Run the full daemon (HTTP polling, default transport).
+npm run feeder:dev
 
-Once the daemon is wired in (Phase 3.4+):
+# Run the full daemon (WebSocket).
+npm run feeder:dev -- --transport ws
 
-```sh
-npm run feeder:dev -- --config ./config --log-level info
+# Wipe all feeder-generated state and start clean.
+npm run feeder:dev -- --clean
+
+# Dry-run: pipeline runs but no Cardano txs are submitted.
+npm run feeder:dev -- --dry-run
 ```
 
 The active network (Cardano Preview ↔ DIA Testnet, Cardano Mainnet ↔
-DIA Mainnet) is selected by `CARDANO_NETWORK` in `.env`, the same
-selector the CLI uses.
+DIA Mainnet) is selected by `CARDANO_NETWORK` in `.env`.
+
+## Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config <dir>` | `./config` | Modular config directory |
+| `--transport http\|ws` | `http` | Scanner transport |
+| `--dry-run` | false | Pipeline runs; no Cardano txs submitted. Also `DRY_RUN=true` env |
+| `--clean` | false | Delete feeder-generated state before starting (see below) |
+| `--validate-only` | — | Load + validate config and exit |
+| `--scan` | — | Run scanner+enricher only, no submission |
+| `--log-level debug\|info\|warn\|error` | `info` | Console verbosity (file always gets everything) |
+| `--help` | — | Show help |
+
+### `--log-level` — what each level shows
+
+| Level | Console shows |
+|---|---|
+| `debug` | Everything — including `condition-filtered` (very noisy: one per non-matching intent, ~10/s), `policy-filtered`, scanner block deliveries (`scanner-ws: delivered N log(s)`), bridge internal calls (connecting, building, UTxO fetches) |
+| `info` (default) | Daemon lifecycle, tx milestones (submitted, confirmed/failed), lane events |
+| `warn` | Transaction failures, preflight rejections, reconcile warnings |
+| `error` | Only TRANSACTION FAILED and fatal errors |
+
+The log file (`feeder.log`) always receives all lines regardless of `--log-level`.
+Level prefixes (`[debug]`, `[warn]`, `[error]`) are preserved in the file for
+grep/filtering; they are stripped from console output.
+
+### `--clean` — what gets deleted
+
+Deletes all files the feeder writes at runtime. CLI bootstrap artifacts
+are never touched.
+
+| Deleted | Reason |
+|---|---|
+| `state/<network>/logs/` | All log streams (feeder.log, transactions.jsonl, lane.jsonl, intents/) |
+| `state/<network>/feeder-checkpoint.json` | Block scanner position — resumes from block 0 |
+| `state/<network>/feeder.sqlite*` | Full DB reset (processed_events, chain_state, transaction_log) |
+| `state/<network>/clients/*/pairs/*.json` | Feeder-written pair state — reconstructed from chain on next update |
+
+| Never deleted | Why |
+|---|---|
+| `state/<network>/config-bootstrap.json` | CLI artifact (`config:bootstrap`) |
+| `state/<network>/clients/*.json` | CLI artifact (`receiver:bootstrap`) |
+
+## Log streams
+
+The feeder writes four separate log streams under `state/<network>/logs/`:
+
+| File | Contents |
+|---|---|
+| `feeder.log` | Linear event stream — one line per daemon event (mirrors stderr) |
+| `transactions.jsonl` | One JSON line per tx pipeline step in real time: `tx_start`, `connecting`, `building`, `signing`, `submitting`, `submitted` (with txHash), `waiting_confirm`, `waiting_utxo`, `writing_state`, `tx_confirmed`/`tx_failed`. Plus a final summary line with per-step ms timings. |
+| `lane.jsonl` | Lane state events: `intent_buffered`, `intent_superseded`, `flush_triggered`, `flush_empty`, `tx_confirmed_reflush`, `lane_idle` |
+| `intents/<ts>_<hash>.log` | Per-intent lifecycle: enriched → routed → queued → step-by-step → superseded OR confirmed OR failed |
 
 ## Environment
 
-**Design rule** (see [`docs/plans/milestone-2-plan.md` Annex D](../../docs/plans/milestone-2-plan.md)):
-
-> The YAML config in `config/` is the single source of truth for
-> every public data point (chain ids, RPC URLs, WS URLs, registry
-> addresses, ABIs). `.env` carries only secrets and selectors.
-
-That means the operator only fills in the `.env` for things that
-either change with the active deployment (network selector) or that
-cannot live in version control (credentials).
+**Design rule:** the YAML config in `config/` is the single source of
+truth for every public data point (chain ids, RPC URLs, WS URLs, registry
+addresses, ABIs). `.env` carries only secrets and selectors.
 
 The feeder's `.env` carries:
 
-- **Selectors** — `CARDANO_NETWORK`, `CARDANO_PROVIDER`, `LOG_LEVEL`,
-  `DRY_RUN`.
+- **Selectors** — `CARDANO_NETWORK`, `CARDANO_PROVIDER`, `DRY_RUN`
 - **Cardano-side secrets** — `BLOCKFROST_PROJECT_ID_*`,
   `BLOCKFROST_API_URL_*`, `KOIOS_API_URL_*`, `CARDANO_WALLET_SEED_*`,
-  `CARDANO_PRIVATE_KEY_*`.
-- **DIA-side secret** — `DIA_WS_CREDENTIAL_*` (Conduit path
-  credential for the WebSocket transport).
-- **DIA-side informational** — `DIA_EXPLORER_URL_*`. Not in Spectra's
-  YAML schema, so we keep it in env rather than invent a YAML field.
-- **Feeder daemon ops** — `API_LISTEN_ADDR`, `API_ENABLE_CORS`,
-  `METRICS_ENABLED`, `METRICS_NAMESPACE`, `DATABASE_DRIVER`,
-  `DATABASE_PATH_*`, `DATABASE_DSN_*`. All names match the upstream
-  Spectra Bridge.
+  `CARDANO_PRIVATE_KEY_*`
+- **DIA-side secret** — `DIA_WS_CREDENTIAL_*` (WebSocket transport only)
+- **Feeder daemon ops** — `API_LISTEN_ADDR`, `METRICS_ENABLED`,
+  `METRICS_NAMESPACE`, `DATABASE_DRIVER`, `DATABASE_PATH_*`,
+  `DATABASE_DSN_*`, `FEEDER_LOG_DIR`
 
-The feeder **does not** declare any of these in `.env` (they live in
-the YAML or are simply not needed):
+Variables that live in YAML (not in `.env`):
 
 | Variable | Lives in |
-| --- | --- |
-| `DIA_SOURCE_CHAIN_ID_*` | `config/infrastructure.<network>.yaml::source.chain_id` (also `chains.yaml`) |
-| `DIA_RPC_URL_*` | `config/infrastructure.<network>.yaml::source.rpc_urls` (also `chains.yaml`) |
+|---|---|
+| `DIA_SOURCE_CHAIN_ID_*` | `config/infrastructure.<network>.yaml::source.chain_id` |
+| `DIA_RPC_URL_*` | `config/infrastructure.<network>.yaml::source.rpc_urls` |
 | `DIA_WS_URL_*` | `config/infrastructure.<network>.yaml::source.ws_url` |
 | `DIA_REGISTRY_ADDRESS_*` | `config/contracts.yaml::<id>.address` |
-| `DIA_DOMAIN_NAME` / `_VERSION` | not needed — feeder consumes pre-signed intents |
-| `DIA_EVM_PRIVATE_KEY_*` | not needed — feeder never signs an intent |
 
-The scanner's starting block is **not** an env var — it lives in
-`config/infrastructure.<network>.yaml` under `source.start_block`,
-matching the Spectra Bridge convention. Once the feeder has seen at
-least one block, the persisted `chain_state.last_processed_block`
-checkpoint always wins over the YAML default.
+The scanner's starting block is not an env var — it lives in
+`config/infrastructure.<network>.yaml` under `source.start_block`.
+Once the feeder has seen at least one block, the persisted
+`chain_state.last_processed_block` checkpoint wins over the YAML default.
 
 ## Config layout
 
 ```text
 config/
-├── infrastructure.preview.yaml     # source RPC/WS, scanner, dedup, API, DB (Cardano Preview ↔ DIA Testnet)
-├── infrastructure.mainnet.yaml     # same shape for Cardano Mainnet ↔ DIA Mainnet
+├── infrastructure.preview.yaml     # source RPC/WS, scanner, dedup, API, DB (Preview ↔ DIA Testnet)
+├── infrastructure.mainnet.yaml     # same shape for Mainnet ↔ DIA Mainnet
 ├── chains.yaml                     # DIA Testnet/Mainnet chain definitions
 ├── contracts.yaml                  # OracleIntentRegistry per network (ABI + address)
 ├── events.yaml                     # IntentRegistered ABI + getIntent enrichment
 └── routers/
-    └── client-a.preview.yaml       # example: 10 Catalyst pairs → one Cardano client
+    └── client-a.preview.yaml       # 10 active DIA testnet pairs → one Cardano client
 ```
-
-This is the same 5-file modular layout the DIA Spectra Bridge expects,
-so DIA's existing router YAMLs can be dropped into `config/routers/`
-with only the `destinations[].cardano` block being Cardano-specific.
-See [`milestone-2-plan.md` Annex C](../../docs/plans/milestone-2-plan.md)
-for the full mapping.
 
 ### Validation
 
-Every YAML is checked at load time. A subset of what the validator
-catches:
+Every YAML is checked at load time. A subset of what the validator catches:
 
-- a destination that declares both `method:` (EVM) and `cardano:`,
-  or neither,
-- a destination that declares an EVM `method:` block (refused with a
-  pointer to the Spectra Bridge — this feeder is Cardano-only),
-- a router referencing an undefined event in `events.yaml`,
-- an unknown `triggers.conditions[].operator`,
-- a `cardano:` block with invalid `network`, `tx_mode`, or missing
-  `client_state_path` / `protocol_state_path`,
-- a non-conventional `private_key_env` name (warning).
+- destination declares both `method:` (EVM) and `cardano:`, or neither
+- destination declares an EVM `method:` block (this feeder is Cardano-only)
+- router referencing an undefined event in `events.yaml`
+- unknown `triggers.conditions[].operator`
+- `cardano:` block with invalid `network`, `tx_mode`, or missing
+  `client_state_path` / `protocol_state_path`
+- non-conventional `private_key_env` name (warning)
 
-Run `npm run feeder:dev -- --config ./config --validate-only` to see
-the full report.
+Run `npm run feeder:dev -- --validate-only` to see the full report.
+
+## HTTP API
+
+The daemon exposes a lightweight HTTP API (default `:8080`):
+
+| Endpoint | Description |
+|---|---|
+| `GET /healthz` | Liveness — always 200 if the process is running |
+| `GET /readyz` | Readiness — 200 only if last registry poll is within `max_processing_lag` |
+| `GET /metrics` | Prometheus metrics (requires `METRICS_ENABLED=true`) |
+| `GET /prices` | Latest confirmed price per (routerId, destinationIndex, symbol) |

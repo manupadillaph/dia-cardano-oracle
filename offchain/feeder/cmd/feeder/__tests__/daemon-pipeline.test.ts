@@ -194,7 +194,7 @@ describe("daemon pipeline — dedup", () => {
       label: "fake",
       async submit(req) {
         processed.push(req.intentHash);
-        return { ok: true, cardanoTxHash: "0xcardano1", intentHash: req.intentHash };
+        return { ok: true, cardanoTxHash: "0xcardano1", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" };
       },
     };
     const queueManager = createQueueManager({
@@ -227,7 +227,7 @@ describe("daemon pipeline — routing", () => {
     const pendingRequests = new Map<string, SubmitRequest>();
     const fakeClient: CardanoWriteClient = {
       label: "fake",
-      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash }; },
+      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" }; },
     };
     const queueManager = createQueueManager({ clientFactory: () => fakeClient });
 
@@ -253,7 +253,7 @@ describe("daemon pipeline — routing", () => {
     const pendingRequests = new Map<string, SubmitRequest>();
     const fakeClient: CardanoWriteClient = {
       label: "fake",
-      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash }; },
+      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" }; },
     };
     const queueManager = createQueueManager({ clientFactory: () => fakeClient });
 
@@ -280,7 +280,7 @@ describe("daemon pipeline — dry-run mode", () => {
     const pendingRequests = new Map<string, SubmitRequest>();
     const fakeClient: CardanoWriteClient = {
       label: "fake",
-      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash }; },
+      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" }; },
     };
     const queueManager = createQueueManager({ clientFactory: () => fakeClient });
 
@@ -308,7 +308,7 @@ describe("daemon pipeline — DB and onResult wiring", () => {
     const fakeClient: CardanoWriteClient = {
       label: "fake",
       async submit(req): Promise<SubmitResult> {
-        return { ok: true, cardanoTxHash: "0xcardanofinal", intentHash: req.intentHash };
+        return { ok: true, cardanoTxHash: "0xcardanofinal", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" };
       },
     };
     const queueManager = createQueueManager({
@@ -342,7 +342,7 @@ describe("daemon pipeline — DB and onResult wiring", () => {
     const pendingRequests = new Map<string, SubmitRequest>();
     const fakeClient: CardanoWriteClient = {
       label: "fake",
-      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash }; },
+      async submit(req) { submitted.push(req.intentHash); return { ok: true, cardanoTxHash: "0x1", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" }; },
     };
     const queueManager = createQueueManager({ clientFactory: () => fakeClient });
 

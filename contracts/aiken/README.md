@@ -96,7 +96,40 @@ without installing Aiken first.
 ```sh
 aiken check    # run the full unit-test suite
 aiken build    # regenerate ./plutus.json
+aiken bench    # run the benchmark suite (CPU/mem growth by size)
 ```
 
 Always commit the rebuilt `plutus.json` alongside any validator change so
 the off-chain CLI stays in sync.
+
+## Benchmarks
+
+The contract package now includes targeted `aiken bench` baselines for the
+hot paths we expect to revisit during fee work:
+
+- `update_coordinator.valid_batch_update`
+- `update_coordinator.valid_settle`
+- `receiver.spend AccrueFee`
+- `receiver.spend Settle`
+- `payment_hook.spend ApplySettle`
+- `pair_state.spend ApplyUpdate`
+
+Useful commands:
+
+```sh
+# Full benchmark dataset as JSON
+aiken bench --max-size 11 > benchmarks.json
+
+# Only the coordinator benches (size 0..11 => modeled N = 1..12)
+aiken bench --max-size 11 -m update_coordinator > update-coordinator-benches.json
+
+# Focus on receiver / hook decode growth
+aiken bench --max-size 11 -m receiver > receiver-benches.json
+aiken bench --max-size 11 -m payment_hook > payment-hook-benches.json
+
+# Control benchmark: pair_state fingerprint path
+aiken bench --max-size 11 -m pair_state > pair-state-benches.json
+```
+
+These samplers model `N = size + 1`, so `--max-size 11` yields the range
+`1..12`, which lines up well with the current batch-capacity investigation.

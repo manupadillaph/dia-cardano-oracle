@@ -19,7 +19,7 @@
 import type { CardanoWriteClient, SubmitRequest, SubmitResult } from "./types.js";
 import { createInflightTable, type InflightTable, type InflightTableOptions } from "./inflight.js";
 import { createSubmissionQueue, type SubmissionQueue } from "./queue.js";
-import { setTimeout as sleep } from "node:timers/promises";
+import type { RetryPolicy } from "./retry-policy.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,24 +34,22 @@ export type QueueManagerOptions = {
    *  Share one table across all queues if you want global lock tracking. */
   inflightTable?: InflightTable;
   inflightOptions?: InflightTableOptions;
-  /** Result callback forwarded to each queue. */
+  /** Result callback forwarded to each queue (fires once per enqueue call,
+   *  after all retries have been exhausted or a success was observed). */
   onResult?: (result: SubmitResult) => void;
   /**
+   * Retry policy applied by each queue after a failed submission.
+   * Construct with `createDefaultRetryPolicy` from `retry-policy.ts`.
+   * When absent, failed submissions are surfaced immediately with no retry.
+   * Maps to `worker_pool.max_retries` + `worker_pool.retry_delay` in the YAML.
+   */
+  retryPolicy?: RetryPolicy;
+  /**
    * Maximum wall-clock ms for a single submit+confirm cycle before it
-   * is considered failed. Maps to `worker_pool.task_timeout` in the YAML.
-   * Default: 60 000 ms.
+   * is considered failed (inflight-table timeout). Maps to
+   * `worker_pool.task_timeout` in the YAML. Default: 60 000 ms.
    */
   taskTimeoutMs?: number;
-  /**
-   * How many ms to wait between retry attempts on a transient failure.
-   * Maps to `worker_pool.retry_delay` in the YAML. Default: 5 000 ms.
-   */
-  retryDelayMs?: number;
-  /**
-   * Max consecutive retry attempts per intent before giving up.
-   * Maps to `worker_pool.max_retries` in the YAML. Default: 3.
-   */
-  maxRetries?: number;
 };
 
 export type QueueManager = {
@@ -83,9 +81,8 @@ export function createQueueManager(options: QueueManagerOptions): QueueManager {
     clientFactory,
     onResult,
     inflightOptions,
+    retryPolicy,
     taskTimeoutMs = 60_000,
-    retryDelayMs  = 5_000,
-    maxRetries    = 3,
   } = options;
 
   const queues = new Map<string, SubmissionQueue>();
@@ -99,6 +96,7 @@ export function createQueueManager(options: QueueManagerOptions): QueueManager {
       queue = createSubmissionQueue({
         client,
         inflight: sharedInflight,
+        retryPolicy,
         inflightTimeoutMs: taskTimeoutMs,
         onResult,
       });
@@ -111,14 +109,7 @@ export function createQueueManager(options: QueueManagerOptions): QueueManager {
     async submit(request) {
       const { client_state_path, protocol_state_path } = request.destination;
       const queue = getOrCreateQueue(client_state_path, protocol_state_path);
-
-      let attempt = 0;
-      while (true) {
-        const result = await queue.enqueue(request);
-        if (result.ok || attempt >= maxRetries) return result;
-        attempt++;
-        await sleep(retryDelayMs);
-      }
+      return queue.enqueue(request);
     },
 
     queueKeys() {

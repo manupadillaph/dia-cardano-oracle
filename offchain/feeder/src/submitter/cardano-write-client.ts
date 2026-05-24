@@ -9,9 +9,9 @@
 // Design choices:
 //
 //   - The client is stateless: it reads the Cardano chain every time
-//     it needs a UTxO instead of maintaining local state. This makes
-//     the client robust to feeder restarts without a persistence layer.
-//     Phase 3.5 adds an optional DB-backed UTxO cache for performance.
+//     it needs a UTxO instead of maintaining local state. Robust to
+//     feeder restarts at the cost of an extra chain read per submission.
+//     NOTE: add a UTxO cache here if chain-read latency becomes a bottleneck.
 //
 //   - All Lucid / Cardano types are hidden behind the interfaces
 //     declared in `types.ts`. The feeder process that imports this
@@ -24,6 +24,8 @@
 
 import type { CardanoWriteClient, SubmitRequest, SubmitResult } from "./types.js";
 import type { OracleIntentBridge } from "../lib-bridge/index.js";
+import type { TransactionLogEntry } from "../logger/file-logger.js";
+import { classifyError } from "../errors/index.js";
 
 // ---------------------------------------------------------------------------
 // Dependency-injection bundle.
@@ -32,14 +34,22 @@ import type { OracleIntentBridge } from "../lib-bridge/index.js";
 /**
  * Everything the write client needs that it cannot construct itself.
  *
- * - `bridge`    — wired by the feeder entry-point from `lib-bridge`;
- *                  in tests, a fake that returns canned results.
- * - `log`       — simple line emitter so the client stays decoupled
- *                  from any particular logger.
+ * - `bridge`         — wired by the feeder entry-point from `lib-bridge`;
+ *                       in tests, a fake that returns canned results.
+ * - `log`            — simple line emitter so the client stays decoupled
+ *                       from any particular logger.
+ * - `onStep`         — called at each Cardano pipeline step. Steps in order:
+ *                       tx_start, connecting, building, signing, submitting,
+ *                       submitted (carries txHash), waiting_confirm,
+ *                       waiting_utxo, writing_state.
+ * - `onTransaction`  — called once per submit attempt (ok or failed) with
+ *                       step timings; drives the summary entry in transactions.jsonl.
  */
 export type CardanoWriteClientDeps = {
   bridge: OracleIntentBridge;
   log?: (line: string) => void;
+  onStep?: (intentHash: string, symbol: string, step: string, txHash?: string) => void;
+  onTransaction?: (entry: TransactionLogEntry) => void | Promise<void>;
 };
 
 // ---------------------------------------------------------------------------
@@ -70,22 +80,76 @@ export function createCardanoWriteClient(
 
     async submit(request: SubmitRequest): Promise<SubmitResult> {
       const { intentHash, enriched } = request;
-      log(`[${label}] submit: intentHash=${intentHash} symbol=${enriched.fullIntent.symbol}`);
+      const symbol = enriched.fullIntent.symbol;
+      log(`[${label}] submit: intentHash=${intentHash} symbol=${symbol}`);
+
+      const startMs = Date.now();
+      const stepStartMs: Record<string, number> = {};
+
+      deps.onStep?.(intentHash, symbol, "tx_start");
+
+      function trackStep(step: string, meta?: { txHash?: string }): void {
+        stepStartMs[step] = Date.now();
+        deps.onStep?.(intentHash, symbol, step, meta?.txHash);
+      }
+
+      function stepsElapsed(): TransactionLogEntry["steps"] {
+        function elapsed(from: string, to: string): number | undefined {
+          return stepStartMs[from] !== undefined && stepStartMs[to] !== undefined
+            ? stepStartMs[to] - stepStartMs[from]
+            : undefined;
+        }
+        return {
+          connecting_ms:      elapsed("connecting",     "building"),
+          building_ms:        elapsed("building",       "signing"),
+          signing_ms:         elapsed("signing",        "submitting"),
+          submitting_ms:      elapsed("submitting",     "submitted"),
+          waiting_confirm_ms: elapsed("waiting_confirm", "waiting_utxo"),
+          waiting_utxo_ms:    elapsed("waiting_utxo",   "writing_state"),
+        };
+      }
 
       try {
-        const txHash = await bridge.submitOracleUpdate({
+        const result = await bridge.submitOracleUpdate({
           clientStatePath,
           protocolStatePath,
           enriched,
           intentHash,
+          onStep: trackStep,
         });
 
-        log(`[${label}] confirmed: txHash=${txHash} intentHash=${intentHash}`);
-        return { ok: true, cardanoTxHash: txHash, intentHash };
+        const total_ms = Date.now() - startMs;
+        await deps.onTransaction?.({
+          ts: new Date().toISOString(),
+          txHash: result.txHash,
+          symbol,
+          intentHash,
+          isCreate: result.isCreate,
+          status: "confirmed",
+          steps: stepsElapsed(),
+          total_ms,
+        });
+
+        log(`[${label}] confirmed: txHash=${result.txHash} intentHash=${intentHash} receiverUnit=${result.receiverUnit}`);
+        return { ok: true, cardanoTxHash: result.txHash, intentHash, receiverUnit: result.receiverUnit, pairUnit: result.pairUnit };
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
-        log(`[${label}] submit failed: intentHash=${intentHash} error=${error.message}`);
-        return { ok: false, intentHash, error };
+        const { code, remediation } = classifyError(err);
+        const total_ms = Date.now() - startMs;
+        await deps.onTransaction?.({
+          ts: new Date().toISOString(),
+          txHash: "",
+          symbol,
+          intentHash,
+          isCreate: false,
+          status: "failed",
+          errorCode: code,
+          errorMessage: error.message,
+          steps: stepsElapsed(),
+          total_ms,
+        });
+        log(`[${label}] submit failed: intentHash=${intentHash} code=${code} error=${error.message}`);
+        return { ok: false, intentHash, error, code, remediation };
       }
     },
   };

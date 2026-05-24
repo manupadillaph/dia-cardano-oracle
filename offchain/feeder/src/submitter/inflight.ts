@@ -9,9 +9,10 @@
 //   `pkg/submitter/inflight.go` — the per-(wallet, chainID) in-flight
 //   map with timeout-based cleanup.
 //
-// The current implementation is in-memory only. Phase 3.5 will add
-// a DB-backed persistence layer so the feeder can resume in-flight
-// tracking after a restart.
+// NOTE: in-memory only — these are receiver-UTxO exclusive locks held during
+// active submission, not persistent records. Completed submissions are recorded
+// in the SQLite transaction_log table. If the feeder restarts mid-submission,
+// the lock is gone but the write client re-reads UTxO state from chain.
 
 export type InflightEntry = {
   /** Cardano tx hash, once submitted. Empty string if only building. */
@@ -49,15 +50,11 @@ export type InflightTable = {
 const DEFAULT_TIMEOUT_MS = 15 * 60_000; // 15 minutes
 
 export type InflightTableOptions = {
-  /** How long (ms) before an unconfirmed tx is considered stuck and
-   *  its lock is released. Defaults to 15 minutes. */
-  timeoutMs?: number;
   /** Injectable clock for tests. */
   now?: () => number;
 };
 
 export function createInflightTable(options: InflightTableOptions = {}): InflightTable {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const clock = options.now ?? Date.now;
 
   // Keyed by txHash for O(1) remove.

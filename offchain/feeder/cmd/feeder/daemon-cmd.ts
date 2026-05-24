@@ -28,7 +28,7 @@
 //   METRICS_ENABLED          "true" to enable prom-client metrics.
 //   METRICS_NAMESPACE        metric name prefix — default "dia_feeder".
 
-import path from "node:path";
+import { rm, glob } from "node:fs/promises";
 
 import { createPublicClient, http, type PublicClient } from "viem";
 
@@ -66,13 +66,14 @@ import {
 } from "../../src/router/index.js";
 import {
   createQueueManager,
-  type QueueManager,
+  createCoalescerManager,
+  type CoalescerManager,
 } from "../../src/submitter/index.js";
 import type { SubmitRequest, SubmitResult } from "../../src/submitter/types.js";
 import type { OracleIntentBridge } from "../../src/lib-bridge/index.js";
 import { createRealOracleIntentBridge } from "../../src/lib-bridge/index.js";
+import { reconcileAllDestinations } from "../../src/lib-bridge/reconcile.js";
 import { createCardanoWriteClient } from "../../src/submitter/cardano-write-client.js";
-import type { CardanoDestinationConfig } from "../../src/config/types.js";
 import {
   createApiServer,
   createMetrics,
@@ -80,7 +81,9 @@ import {
   type HealthState,
 } from "../../src/api/index.js";
 import { createDb, type DbConfig } from "../../src/persistence/index.js";
-import { createFileLogger, type FileLogger, type IntentLogEntry } from "../../src/logger/file-logger.js";
+import { createFileLogger, type FileLogger } from "../../src/logger/file-logger.js";
+import { runPreflight } from "../../src/submitter/preflight.js";
+import { createDefaultRetryPolicy } from "../../src/submitter/retry-policy.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,6 +94,7 @@ export type DaemonCmdOptions = {
   configPath: string;
   transport: "http" | "ws";
   dryRun: boolean;
+  cleanState: boolean;
   logLevel: string;
   report: (line: string) => void;
   signal?: AbortSignal;
@@ -115,11 +119,108 @@ function parseDurationMs(raw: string | undefined, fallback: number): number {
 // Entry point
 // ---------------------------------------------------------------------------
 
+/**
+ * Delete all feeder-generated state for the given network so the next
+ * run starts clean.  Never touches CLI bootstrap artifacts:
+ *   config-bootstrap.json, clients/<name>.json.
+ *
+ * Deleted:
+ *   state/<network>/logs/                    (all log streams)
+ *   state/<network>/feeder-checkpoint.json   (block scanner position)
+ *   state/<network>/feeder.sqlite*           (SQLite DB + WAL files)
+ *   state/<network>/clients/*\/pairs/*.json  (feeder-written pair state)
+ */
+// ---------------------------------------------------------------------------
+// Log-level filter
+// ---------------------------------------------------------------------------
+
+type LogLevelStr = "debug" | "info" | "warn" | "error";
+
+const LEVEL_ORDER: Record<LogLevelStr, number> = {
+  debug: 0, info: 1, warn: 2, error: 3,
+};
+
+/**
+ * Wrap a base reporter so only messages at or above `minLevel` reach it.
+ *
+ * Messages may carry an explicit level prefix — `[debug]`, `[info]`,
+ * `[warn]`, `[error]` — that is stripped before forwarding so the output
+ * stays clean.  Messages with no prefix are treated as `info`.
+ *
+ * Scanner block-delivery lines (`scanner-ws:`, `scanner-http:`) are
+ * automatically treated as `debug` regardless of any prefix.
+ *
+ * The file logger always receives the raw (prefixed) line so the full
+ * record is preserved for post-hoc analysis.
+ */
+function createLeveledReport(
+  base: (line: string) => void,
+  minLevel: LogLevelStr,
+): (line: string) => void {
+  const min = LEVEL_ORDER[minLevel] ?? LEVEL_ORDER.info;
+  return (line: string) => {
+    let msgLevel: LogLevelStr = "info";
+    let stripped = line;
+    for (const lv of Object.keys(LEVEL_ORDER) as LogLevelStr[]) {
+      const tag = `[${lv}] `;
+      if (line.startsWith(tag)) {
+        msgLevel = lv;
+        stripped = line.slice(tag.length);
+        break;
+      }
+    }
+    if (stripped.startsWith("scanner-ws:") || stripped.startsWith("scanner-http:")) {
+      msgLevel = "debug";
+    }
+    if (LEVEL_ORDER[msgLevel] >= min) {
+      base(stripped);
+    }
+  };
+}
+
+async function cleanFeederState(network: string, report: (line: string) => void): Promise<void> {
+  const base = `state/${network.toLowerCase()}`;
+
+  const targets: Array<{ path: string; isGlob?: boolean }> = [
+    { path: `${base}/logs` },
+    { path: `${base}/feeder-checkpoint.json` },
+    { path: `${base}/feeder.sqlite` },
+    { path: `${base}/feeder.sqlite-shm` },
+    { path: `${base}/feeder.sqlite-wal` },
+  ];
+
+  // Pair state files: state/<network>/clients/*/pairs/*.json
+  for await (const pairFile of glob(`${base}/clients/*/pairs/*.json`)) {
+    targets.push({ path: pairFile });
+  }
+
+  for (const { path } of targets) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      report(`clean: removed ${path}`);
+    } catch (err) {
+      report(`clean: could not remove ${path} — ${(err as Error).message}`);
+    }
+  }
+}
+
 export async function runDaemon(options: DaemonCmdOptions): Promise<number> {
   const { network, configPath, transport, report: reportToConsole, signal } = options;
-  
-  // Mutable report - starts as console-only, gets wrapped after fileLogger ready
-  let report = reportToConsole;
+
+  const logLevel = (options.logLevel in LEVEL_ORDER
+    ? options.logLevel as LogLevelStr
+    : "info");
+  const leveledConsole = createLeveledReport(reportToConsole, logLevel);
+
+  if (options.cleanState) {
+    leveledConsole(`daemon: --clean requested — deleting feeder state for network=${network}`);
+    await cleanFeederState(network, leveledConsole);
+    leveledConsole(`daemon: clean complete`);
+  }
+
+  // Mutable report — starts as leveled console, gets wrapped after fileLogger ready.
+  // File always receives the full line (with level prefix intact for analysis).
+  let report = leveledConsole;
 
   // ------------------------------------------------------------------
   // 1. Load + validate config.
@@ -167,8 +268,9 @@ export async function runDaemon(options: DaemonCmdOptions): Promise<number> {
   const logDir = process.env.FEEDER_LOG_DIR?.trim() ?? `state/${network.toLowerCase()}/logs`;
   const fileLogger: FileLogger = await createFileLogger(logDir);
   
-  // Wrap report to write to both console and file
-  report = fileLogger.getReportingFn(reportToConsole);
+  // After fileLogger is ready, wrap so the file gets all lines (unfiltered)
+  // while the console keeps the level filter applied above.
+  report = fileLogger.getReportingFn(leveledConsole);
   
   report(`daemon: file logger ready at ${logDir}`);
 
@@ -245,75 +347,160 @@ export async function runDaemon(options: DaemonCmdOptions): Promise<number> {
   // ------------------------------------------------------------------
   // 9. Oracle intent bridge + queue manager.
   // ------------------------------------------------------------------
+  // Bridge internals (UTxO fetches, Lucid calls) and write-client step
+  // logs are debug-level — too verbose for normal operation.
+  const debugReport = (line: string) => report(`[debug] ${line}`);
+
   const bridge: OracleIntentBridge = dryRun
     ? makeDryRunBridge(report)
-    : createRealOracleIntentBridge({ log: report });
+    : createRealOracleIntentBridge({ log: debugReport });
 
-  // Correlate submit results back to their originating requests so we can
-  // update the price cache with symbol/price/timestamp (which live on the
-  // enriched intent, not on the SubmitResult).
-  const pendingRequests = new Map<string, SubmitRequest>();
+  const retryPolicy = createDefaultRetryPolicy({ maxRetries, delayMs: retryDelayMs });
 
-  const queueManager: QueueManager = createQueueManager({
+  const queueManager = createQueueManager({
     clientFactory: (clientStatePath, protocolStatePath) =>
-      createCardanoWriteClient(clientStatePath, protocolStatePath, { bridge, log: report }),
+      createCardanoWriteClient(clientStatePath, protocolStatePath, {
+        bridge,
+        log: debugReport,
+        onStep: (intentHash, symbol, step, txHash) => {
+          if (step !== "tx_start") {
+            void fileLogger.logIntentStep({
+              ts: new Date().toISOString(), level: "info",
+              intentHash, symbol, step, message: step,
+              meta: txHash ? { txHash } : undefined,
+            });
+          }
+          void fileLogger.logTransactionEvent({
+            ts: new Date().toISOString(),
+            event: step, intentHash, symbol,
+            txHash,
+          });
+        },
+        onTransaction: async (entry) => {
+          await fileLogger.logTransactionEvent({
+            ts: entry.ts,
+            event: entry.status === "confirmed" ? "tx_confirmed" : "tx_failed",
+            intentHash: entry.intentHash,
+            symbol: entry.symbol,
+            txHash: entry.txHash || undefined,
+            isCreate: entry.isCreate,
+            total_ms: entry.total_ms,
+            errorCode: entry.errorCode,
+            errorMessage: entry.errorMessage,
+          });
+          await fileLogger.logTransaction(entry);
+        },
+      }),
     taskTimeoutMs,
-    retryDelayMs,
-    maxRetries,
-    onResult: async (result: SubmitResult) => {
-      const req = pendingRequests.get(result.intentHash);
-      pendingRequests.delete(result.intentHash);
+    retryPolicy,
+  });
 
+  const coalesceWindowMs = parseDurationMs(infra.event_processor?.coalesce_window, 2_000);
+  const maxIntentAgeRaw  = infra.event_processor?.max_intent_age;
+  const maxIntentAgeMs   = maxIntentAgeRaw ? parseDurationMs(maxIntentAgeRaw, 0) || undefined : undefined;
+
+  const coalescerManager = createCoalescerManager({
+    queueManager,
+    coalesceWindowMs,
+    maxIntentAgeMs,
+    onResult: async (result: SubmitResult, req: SubmitRequest) => {
       if (result.ok) {
         healthState.lastSubmitMs = Date.now();
         metrics.cardanoTxSubmitted.inc({ network });
-        if (req) {
-          const { routerId, destinationIndex, enriched } = req;
-          const { symbol, price, timestamp } = enriched.fullIntent;
-          priceCache.set(
-            { routerId, destinationIndex, symbol },
-            {
-              symbol,
-              price,
-              timestamp,
-              intentHash: result.intentHash,
-              cardanoTxHash: result.cardanoTxHash,
-              updatedAtMs: Date.now(),
-            },
-          );
-          void db.updateTransactionLog(result.intentHash, result.cardanoTxHash, {
-            status: "confirmed",
-            confirmedAtMs: Date.now(),
-          });
-          // Log: transaction confirmed
-          await fileLogger.logIntentStep({
-            ts: new Date().toISOString(),
-            level: "info",
-            intentHash: result.intentHash,
+        const { routerId, destinationIndex, enriched } = req;
+        const { symbol, price, timestamp } = enriched.fullIntent;
+        priceCache.set(
+          { routerId, destinationIndex, symbol },
+          {
             symbol,
-            step: "confirm",
-            message: `Cardano transaction confirmed`,
-            meta: { cardanoTxHash: result.cardanoTxHash },
-          });
-        }
+            price,
+            timestamp,
+            intentHash: result.intentHash,
+            cardanoTxHash: result.cardanoTxHash,
+            updatedAtMs: Date.now(),
+          },
+        );
+        void db.insertTransactionLog({
+          intentHash: result.intentHash,
+          cardanoTxHash: result.cardanoTxHash,
+          routerId,
+          destinationIndex,
+          clientStatePath: req.destination.client_state_path,
+          status: "confirmed",
+          submittedAtMs: Date.now(),
+          confirmedAtMs: Date.now(),
+        });
+        await fileLogger.logIntentStep({
+          ts: new Date().toISOString(),
+          level: "info",
+          intentHash: result.intentHash,
+          symbol,
+          step: "confirm",
+          message: `Cardano transaction confirmed`,
+          meta: { cardanoTxHash: result.cardanoTxHash },
+        });
       } else {
         metrics.cardanoTxFailed.inc({ network });
-        const symbol = req?.enriched.fullIntent.symbol ?? "unknown";
-        report(`daemon: TRANSACTION FAILED — intentHash=${result.intentHash} symbol=${symbol} error="${result.error}"`);
-        report(`daemon: WARNING — Queue continues but subsequent transactions may also fail until the issue is resolved.`);
-        // Log: transaction failed
+        const symbol = req.enriched.fullIntent.symbol;
+        report(
+          `[error] daemon: TRANSACTION FAILED — code=${result.code} intentHash=${result.intentHash} ` +
+          `symbol=${symbol} error="${result.error.message}"`,
+        );
+        report(`[warn] daemon: REMEDIATION — ${result.remediation}`);
+        void db.insertTransactionLog({
+          intentHash: result.intentHash,
+          cardanoTxHash: "",
+          routerId: req.routerId,
+          destinationIndex: req.destinationIndex,
+          clientStatePath: req.destination.client_state_path,
+          status: "failed",
+          submittedAtMs: Date.now(),
+        });
         await fileLogger.logIntentStep({
           ts: new Date().toISOString(),
           level: "error",
           intentHash: result.intentHash,
           symbol,
           step: "failed",
-          message: `Cardano transaction failed: ${result.error}`,
-          meta: { error: result.error },
+          message: `Cardano transaction failed: ${result.error.message}`,
+          meta: { code: result.code, remediation: result.remediation, error: result.error.message },
         });
       }
     },
+    onSupersede: async (superseded: SubmitRequest, by: SubmitRequest) => {
+      await fileLogger.logIntentStep({
+        ts: new Date().toISOString(), level: "info",
+        intentHash: superseded.intentHash,
+        symbol: superseded.enriched.fullIntent.symbol,
+        step: "superseded",
+        message: `Superseded by newer intent`,
+        meta: { supersededByHash: by.intentHash },
+      });
+    },
+    onLaneEvent: async (event) => {
+      await fileLogger.logLaneEvent({
+        ts: new Date().toISOString(),
+        lane: event.lane,
+        event: event.kind,
+        symbol: event.symbol,
+        intentHash: event.intentHash,
+        supersededByHash: event.supersededByHash,
+        bufferSize: event.bufferSize,
+        fromState: event.fromState,
+        toState: event.toState,
+      });
+    },
   });
+
+  // ------------------------------------------------------------------
+  // 9.5. Startup reconciliation — sync local pair-state files with the
+  //      live on-chain pair UTxOs for every Cardano destination. Runs
+  //      once before the scan pipeline starts. Failures are logged as
+  //      warnings; they do not abort startup.
+  // ------------------------------------------------------------------
+  if (!dryRun) {
+    await reconcileAllDestinations({ config, log: report });
+  }
 
   // ------------------------------------------------------------------
   // 10. Source pipeline.
@@ -343,9 +530,7 @@ export async function runDaemon(options: DaemonCmdOptions): Promise<number> {
         enricher,
         routerRegistry,
         priceCache,
-        queueManager,
-        pendingRequests,
-        db,
+        coalescerManager,
         fileLogger,
         network,
         dryRun,
@@ -394,9 +579,7 @@ type ProcessOneEventInputs = {
   enricher: (event: ExtractedEvent) => Promise<EnrichedIntent>;
   routerRegistry: ReturnType<typeof createRouterRegistry>;
   priceCache: ReturnType<typeof createPriceCache>;
-  queueManager: QueueManager;
-  pendingRequests: Map<string, SubmitRequest>;
-  db: Awaited<ReturnType<typeof createDb>>;
+  coalescerManager: CoalescerManager;
   fileLogger: FileLogger;
   network: string;
   dryRun: boolean;
@@ -407,7 +590,7 @@ type ProcessOneEventInputs = {
 async function processOneEvent(inputs: ProcessOneEventInputs): Promise<void> {
   const {
     event, dedupCache, enricher, routerRegistry,
-    priceCache, queueManager, pendingRequests, db, fileLogger, dryRun, report, metrics,
+    priceCache, coalescerManager, fileLogger, dryRun, report, metrics,
   } = inputs;
 
   if (!dedupCache.add(event.intentHash)) {
@@ -428,13 +611,11 @@ async function processOneEvent(inputs: ProcessOneEventInputs): Promise<void> {
 
   for (const { routerId, reason } of output.conditionFiltered) {
     metrics.intentsFiltered.inc({ router_id: routerId, reason: "condition" });
-    report(`daemon: condition-filtered router=${routerId} reason="${reason}"`);
-    // Note: no file log for filtered intents - only terminal output
+    report(`[debug] daemon: condition-filtered router=${routerId} reason="${reason}"`);
   }
   for (const { routerId, destinationIndex } of output.policyFiltered) {
     metrics.intentsFiltered.inc({ router_id: routerId, reason: "policy" });
-    report(`daemon: policy-filtered router=${routerId} dest=${destinationIndex}`);
-    // Note: no file log for filtered intents - only terminal output
+    report(`[debug] daemon: policy-filtered router=${routerId} dest=${destinationIndex}`);
   }
 
   for (const dispatch of output.dispatched) {
@@ -443,7 +624,7 @@ async function processOneEvent(inputs: ProcessOneEventInputs): Promise<void> {
     const cardano = dispatch.destination.cardano;
     if (!cardano) {
       report(
-        `daemon: skipping router=${dispatch.routerId} dest=${dispatch.destinationIndex} — no cardano block in destination config`,
+        `[warn] daemon: skipping router=${dispatch.routerId} dest=${dispatch.destinationIndex} — no cardano block in destination config`,
       );
       continue;
     }
@@ -478,6 +659,26 @@ async function processOneEvent(inputs: ProcessOneEventInputs): Promise<void> {
       meta: { routerId: dispatch.routerId, destinationIndex: dispatch.destinationIndex },
     });
 
+    // 3. preflight — fast checks before the intent occupies a queue slot
+    const preflight = runPreflight({ enriched, intentHash: event.intentHash });
+    if (!preflight.ok) {
+      report(
+        `[warn] daemon: preflight rejected router=${dispatch.routerId} ` +
+        `code=${preflight.code} intentHash=${event.intentHash} reason="${preflight.reason}"`,
+      );
+      await fileLogger.logIntentStep({
+        ts: new Date().toISOString(),
+        level: "warn",
+        intentHash: event.intentHash,
+        symbol: enriched.fullIntent.symbol,
+        step: "preflight_rejected",
+        message: preflight.reason,
+        meta: { code: preflight.code, remediation: preflight.remediation },
+      });
+      metrics.intentsFiltered.inc({ router_id: dispatch.routerId, reason: preflight.code });
+      continue;
+    }
+
     if (dryRun) {
       report(
         `daemon: [dry-run] would submit router=${dispatch.routerId} dest=${dispatch.destinationIndex} ` +
@@ -494,30 +695,18 @@ async function processOneEvent(inputs: ProcessOneEventInputs): Promise<void> {
       destinationIndex: dispatch.destinationIndex,
     };
 
-    inputs.pendingRequests.set(event.intentHash, req);
-
-    // 3. submit
+    // 3. hand off to coalescer (supersession + accumulation window)
     await fileLogger.logIntentStep({
       ts: new Date().toISOString(),
       level: "info",
       intentHash: event.intentHash,
       symbol: enriched.fullIntent.symbol,
-      step: "submit",
-      message: `Intent queued for Cardano submission`,
+      step: "queued",
+      message: `Intent accepted by coalescer`,
       meta: { routerId: dispatch.routerId, destinationIndex: dispatch.destinationIndex, clientStatePath: cardano.client_state_path },
     });
 
-    void db.insertTransactionLog({
-      intentHash: event.intentHash,
-      cardanoTxHash: "",
-      routerId: dispatch.routerId,
-      destinationIndex: dispatch.destinationIndex,
-      clientStatePath: cardano.client_state_path,
-      status: "submitted",
-      submittedAtMs: Date.now(),
-    });
-
-    void queueManager.submit(req);
+    coalescerManager.accept(req);
   }
 }
 
@@ -593,7 +782,12 @@ function makeDryRunBridge(report: (line: string) => void): OracleIntentBridge {
         `daemon: [dry-run bridge] submitOracleUpdate intentHash=${params.intentHash} ` +
         `client=${params.clientStatePath}`,
       );
-      return "dry-run-tx-hash";
+      return {
+        txHash: "dry-run-tx-hash",
+        receiverUnit: "dry-run-receiver-unit",
+        pairUnit: "dry-run-pair-unit",
+        isCreate: false,
+      };
     },
   };
 }

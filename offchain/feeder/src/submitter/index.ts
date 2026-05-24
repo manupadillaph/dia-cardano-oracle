@@ -32,3 +32,18 @@ export type {
   SubmitResultOk,
   SubmitResultErr,
 } from "./types.js";
+
+export {
+  createCoalescerManager,
+  type CoalescerManager,
+  type CoalescerOptions,
+} from "./coalescer.js";
+
+export {
+  createDefaultRetryPolicy,
+  NON_RETRIABLE_CODES,
+  DEFAULT_MAX_RETRIES,
+  DEFAULT_RETRY_DELAY_MS,
+  type RetryPolicy,
+  type RetryDecision,
+} from "./retry-policy.js";

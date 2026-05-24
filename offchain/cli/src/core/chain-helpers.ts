@@ -25,11 +25,8 @@ import { Constr, getAddressDetails, type UTxO } from "@lucid-evolution/lucid";
 import { Data, type Data as PlutusData } from "@lucid-evolution/plutus";
 
 import { type DiaOracleIntent } from "./dia-intent.js";
-import {
-  normalizeHex,
-  splitUnit,
-  toBigInt,
-} from "./primitives.js";
+import { assertTxStillOnChain } from "./tx-onchain-check.js";
+import { normalizeHex } from "./primitives.js";
 import type {
   ConfigState,
   PairLiveState,
@@ -43,6 +40,10 @@ import { makeConfiguredLucid } from "./lucid.js";
 // working. Canonical implementations live in core/primitives.ts; these
 // are re-exports, not duplicates.
 export { splitUnit, toBigInt } from "./primitives.js";
+
+// Re-export the rollback error so callers of the wait helpers can
+// import everything they need from this one module.
+export { TxDroppedFromChainError } from "./tx-onchain-check.js";
 
 export const BOOTSTRAP_REF_MIN_LOVELACE = 1_000_000n;
 
@@ -74,7 +75,26 @@ export const BOOTSTRAP_REF_MIN_LOVELACE = 1_000_000n;
 // an NFT marks the UTxO. The outRef-based ones use `lucid.utxosByOutRef(...)`
 // and exist for UTxOs that carry no marker NFT (reference scripts) or whose
 // unit no longer exists anywhere on chain after the tx (burns/reclaims).
+//
+// Default timeout ceilings (with delayMs = 1_500 ms per attempt):
+//   waitForUnitUtxoReplacement / waitForOutRefAvailable / waitForOutRefGone:
+//     800 attempts × 1.5 s ≈ 20 min — covers even the slowest Blockfrost
+//     indexer lag observed in production (Koios confirms in <60 s; Blockfrost
+//     can lag >30 s on Preview/Mainnet under load).
+//   waitForWalletSettlement:
+//     480 attempts × 1.5 s ≈ 12 min — wallet UTxO set typically settles in
+//     <30 s; the 12-min ceiling is a conservative guard against provider lag.
+//
+// Rollback detection: the three "wait 3" helpers accept an optional `txHash`.
+//   When provided, every ROLLBACK_CHECK_INTERVAL attempts (~90 s) they call
+//   `assertTxStillOnChain`. If both Koios and Blockfrost REST agree the tx is
+//   absent, `TxDroppedFromChainError` is thrown immediately so the caller
+//   fails fast instead of waiting out the full 20-min ceiling.
 // ---------------------------------------------------------------------------
+
+// Interval at which the wait-3 helpers check for rollback (in loop iterations).
+// 60 × 1_500 ms default delay ≈ 90 s between checks.
+const ROLLBACK_CHECK_INTERVAL = 60;
 
 /**
  * Resolve the single on-chain UTxO at `address` that carries `unit`.
@@ -126,6 +146,12 @@ export async function findSingleUtxoAtUnit(
  * config-update, etc.). It ensures the indexer has caught up so the next
  * CLI step can resolve the new UTxO without retries.
  *
+ * Default ceiling: 800 attempts × 1.5 s ≈ 20 min. Pass `maxAttempts` /
+ * `delayMs` to override. Pass `txHash` (the hash of the submitted tx) to
+ * enable rollback detection: every `ROLLBACK_CHECK_INTERVAL` attempts the
+ * helper verifies the tx is still on-chain and throws `TxDroppedFromChainError`
+ * if both Koios and Blockfrost REST independently report it absent.
+ *
  * Not appropriate when the NFT is being created for the first time
  * (use `findSingleUtxoAtUnit`) or when the NFT is destroyed (use
  * `waitForOutRefGone`).
@@ -136,10 +162,11 @@ export async function waitForUnitUtxoReplacement(args: {
   unit: string;
   label: string;
   previousOutRef?: OutRefLike;
+  txHash?: string;
   maxAttempts?: number;
   delayMs?: number;
 }): Promise<UTxO> {
-  const maxAttempts = args.maxAttempts ?? 20;
+  const maxAttempts = args.maxAttempts ?? 800;
   const delayMs = args.delayMs ?? 1_500;
   let lastError: unknown = null;
 
@@ -158,6 +185,14 @@ export async function waitForUnitUtxoReplacement(args: {
       }
     } catch (error) {
       lastError = error;
+    }
+
+    if (
+      args.txHash &&
+      attempt > 0 &&
+      attempt % ROLLBACK_CHECK_INTERVAL === 0
+    ) {
+      await assertTxStillOnChain({ txHash: args.txHash });
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -270,6 +305,10 @@ export function selectBootstrapUtxo(
  * read by outRef rather than by unit. For NFT-bearing outputs, prefer
  * `findSingleUtxoAtUnit` (first-time creation) or
  * `waitForUnitUtxoReplacement` (existing unit, new outRef).
+ *
+ * Default ceiling: 800 attempts × 1.5 s ≈ 20 min. Rollback detection runs
+ * automatically every `ROLLBACK_CHECK_INTERVAL` attempts using
+ * `args.outRef.txHash` as the submitted tx hash.
  */
 export async function waitForOutRefAvailable(args: {
   lucid: Awaited<ReturnType<typeof makeConfiguredLucid>>;
@@ -278,7 +317,7 @@ export async function waitForOutRefAvailable(args: {
   maxAttempts?: number;
   delayMs?: number;
 }): Promise<UTxO> {
-  const maxAttempts = args.maxAttempts ?? 20;
+  const maxAttempts = args.maxAttempts ?? 800;
   const delayMs = args.delayMs ?? 1_500;
   let lastError: unknown = null;
 
@@ -293,6 +332,11 @@ export async function waitForOutRefAvailable(args: {
     } catch (error) {
       lastError = error;
     }
+
+    if (attempt > 0 && attempt % ROLLBACK_CHECK_INTERVAL === 0) {
+      await assertTxStillOnChain({ txHash: args.outRef.txHash });
+    }
+
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -316,15 +360,22 @@ export async function waitForOutRefAvailable(args: {
  * Counterpart to `waitForOutRefAvailable`. Use this only when no
  * replacement UTxO is expected; for NFT-bearing replacements use
  * `waitForUnitUtxoReplacement`.
+ *
+ * Default ceiling: 800 attempts × 1.5 s ≈ 20 min. Pass `txHash` (the hash
+ * of the submitted tx that burned/reclaimed `outRef`) to enable rollback
+ * detection: every `ROLLBACK_CHECK_INTERVAL` attempts the helper verifies
+ * the tx is still on-chain and throws `TxDroppedFromChainError` if both
+ * Koios and Blockfrost REST independently report it absent.
  */
 export async function waitForOutRefGone(args: {
   lucid: Awaited<ReturnType<typeof makeConfiguredLucid>>;
   outRef: OutRefLike;
   label: string;
+  txHash?: string;
   maxAttempts?: number;
   delayMs?: number;
 }): Promise<void> {
-  const maxAttempts = args.maxAttempts ?? 20;
+  const maxAttempts = args.maxAttempts ?? 800;
   const delayMs = args.delayMs ?? 1_500;
   let lastError: unknown = null;
 
@@ -339,6 +390,15 @@ export async function waitForOutRefGone(args: {
     } catch (error) {
       lastError = error;
     }
+
+    if (
+      args.txHash &&
+      attempt > 0 &&
+      attempt % ROLLBACK_CHECK_INTERVAL === 0
+    ) {
+      await assertTxStillOnChain({ txHash: args.txHash });
+    }
+
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
@@ -355,6 +415,10 @@ export async function waitForOutRefGone(args: {
  * the spent inputs are no longer visible AND the wallet snapshot has
  * changed since `previousUtxos`. Used by every non-deploy and deploy tx
  * after `awaitTxConfirmation` and before any script-side wait.
+ *
+ * Default ceiling: 480 attempts × 1.5 s ≈ 12 min. The wallet UTxO set
+ * typically settles within 30 s; the 12-min ceiling guards against slow
+ * provider indexing without blocking indefinitely.
  *
  * Behavior knobs:
  *  - `spentUtxos: []` + `requireChangeWhenNoSpentUtxos: true` → wait
@@ -384,7 +448,7 @@ export async function waitForWalletSettlement(args: {
   }
 
   const previousSnapshot = utxoSnapshot(args.previousUtxos);
-  const maxAttempts = args.maxAttempts ?? 12;
+  const maxAttempts = args.maxAttempts ?? 480;
   const delayMs = args.delayMs ?? 1_500;
   let lastError: unknown = null;
 

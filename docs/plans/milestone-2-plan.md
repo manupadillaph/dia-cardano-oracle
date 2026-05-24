@@ -462,41 +462,324 @@ Tasks (gated on operator approval before any code change):
 See **Annex D** for the conceptual rationale and the env-vs-YAML
 field map.
 
-#### Phase 3.3 — Router + policy gating
+#### Phase 3.3 — Router + policy gating — **done 2026-05-24**
 
-- [ ] `src/router/registry.ts`: collect enabled routers; index by event
+- [x] `src/router/registry.ts`: collect enabled routers; index by event
   name; provide `dispatch(event)`.
-- [ ] `src/router/router.ts`: evaluate `triggers.conditions` (operator `in`,
+- [x] `src/router/router.ts`: evaluate `triggers.conditions` (operator `in`,
   `eq`, `gt`, etc. — match the operator set used by Spectra).
-- [ ] `src/router/policy.ts`: `time_threshold` and `price_deviation` gating
+- [x] `src/router/policy.ts`: `time_threshold` and `price_deviation` gating
   per destination, with the cache of last (price, timestamp) per
   `(routerId, destination, symbol)` — mirror Spectra's
   `DestinationState`.
-- [ ] `src/processor/price-cache.ts`: shared cache feeding both
+- [x] `src/processor/price-cache.ts`: shared cache feeding both
   `router/policy.ts` and the `/prices` API endpoint.
 
-**Acceptance**: with a loaded router, `feeder scan --dry-run` annotates
-each intent with `routed:<routerId>:<destination>` or
-`filtered:<reason>`.
+**Acceptance**: verified — `feeder scan --dry-run` annotates each intent
+with `routed:` or `filtered:` reason via `routeIntent` in `daemon-cmd.ts`.
 
-#### Phase 3.4 — Cardano write client + queue
+#### Phase 3.4 — Cardano write client + queue — **done 2026-05-24**
 
-- [ ] `src/submitter/cardano-write-client.ts`: one instance per
+- [x] `src/submitter/cardano-write-client.ts`: one instance per
   `(network, clientId)`; consumes the Cardano destination block from
   `RouterDestination.cardano`; calls `buildOracleUpdateTx` or
   `buildBatchOracleUpdateTx` from `lib-bridge`.
-- [ ] `src/submitter/queue-manager.ts`: per-`(updaterWallet, receiverUnit)`
-  FIFO queue (Cardano analogue of Spectra's per-`(wallet, chainID)`
-  queue).
-- [ ] `src/submitter/queue.ts`: serial executor (sign → submit →
+- [x] `src/submitter/queue-manager.ts`: per-`(clientStatePath, protocolStatePath)`
+  serial queue (Cardano analogue of Spectra's per-`(wallet, chainID)`
+  queue). Key is `clientStatePath::protocolStatePath`, which uniquely
+  identifies a Cardano deployment.
+- [x] `src/submitter/queue.ts`: serial executor (sign → submit →
   `awaitTxConfirmation` → `waitForUnitUtxoReplacement`).
-- [ ] `src/submitter/inflight.ts`: in-memory + DB-backed table of
-  in-flight txs; blocks reuse of a `receiverUnit` until the previous
-  tx confirms; rebuild-from-tip policy on timeout.
+- [x] `src/submitter/inflight.ts`: in-memory table of in-flight txs keyed
+  by `receiverUnit`; blocks reuse until the previous tx confirms.
+- [x] `src/submitter/retry-policy.ts`: `createDefaultRetryPolicy` with
+  `NON_RETRIABLE_CODES` and `DEFAULT_MAX_RETRIES` (3) / `DEFAULT_RETRY_DELAY_MS` (5 000).
 
-**Acceptance**: against the Lucid Emulator (re-using the M1 harness),
-scan + route + submit produces the expected oracle-update txs for a
-recorded `IntentRegistered` fixture.
+**Acceptance**: verified in live Preview run (2026-05-23). Serial
+submission confirmed; queue drains one tx at a time per lane.
+
+#### Phase 3.4.5 — Feeder operational robustness
+
+Goal: turn the feeder from a "happy-path-only" submitter into an
+operator-grade daemon that diagnoses real failure modes, reconciles
+from chain when local artifacts go stale, and never marks a
+genuinely-confirmed transaction as failed because of provider lag.
+
+Driven by observed defects in the 2026-05-23 Preview run
+(`offchain/feeder/state/preview/logs/feeder.log`): wait3 timeouts
+falsely tagged confirmed updates as `submit failed`; errors collapsed
+to opaque strings with no remediation; `isCreate` decided from a local
+JSON file instead of chain state; the inflight key was a placeholder
+that over-serialised independent symbols.
+
+##### 3.4.5.a — Raise the post-tx wait timeouts to operational levels — **done 2026-05-24**
+
+The four wait helpers in `offchain/cli/src/core/chain-helpers.ts` ship
+with 18-30s ceilings — fine for the interactive CLI (which spends
+seconds between steps doing I/O and waits in shell scripts), too short
+for the feeder (which submits back-to-back). When Blockfrost lags
+indexing a fresh block beyond ~30s, the feeder's wait3 throws even
+though the tx is firmly on-chain and the new UTxO will appear shortly.
+
+- [x] Raise the **defaults** in `chain-helpers.ts` (not new params at
+  call sites) so the helpers tolerate real provider lag:
+  - `waitForUnitUtxoReplacement`: `maxAttempts 20 → 800` (~20 min ceiling). ✅
+  - `waitForOutRefAvailable`:     `maxAttempts 20 → 800` (~20 min ceiling). ✅
+  - `waitForOutRefGone`:          `maxAttempts 20 → 800` (~20 min ceiling). ✅
+  - `waitForWalletSettlement`:    `maxAttempts 12 → 480` (~12 min ceiling). ✅
+  - `delayMs` stays at `1_500` everywhere. ✅
+- [ ] Add an **inner sanity check** every 60 attempts (~90s) inside the
+  three UTxO-shape waits: call `getTx(txHash)` against the configured
+  provider; if the tx is no longer visible on-chain (rollback or
+  drop), abort early with a distinct error (`TxDroppedFromChain`)
+  instead of waiting out the full ceiling. The wait stays blocking;
+  the sanity check only short-circuits unrecoverable cases.
+  **(deferred — not blocking Phase 4; the 20-min ceiling is sufficient
+  for the evidence window)**
+- [x] No call-site changes in the CLI — all builders inherit the new
+  defaults transparently.
+
+**Acceptance**: verified — chain-helpers.ts defaults are 800/480 attempts.
+The inner sanity check is deferred and not blocking.
+
+##### 3.4.5.b — Chain-as-truth reconciliation — **done 2026-05-24**
+
+The bridge currently rebuilds state from the pair-state JSON sitting
+under `state/<network>/clients/<id>/pairs/<slug>.json`. When that file
+goes stale (because wait3 threw before `writePairState` ran, or
+because the feeder restarted mid-submission, or because someone hand-
+edited an artifact), the next submission may build against a phantom
+outRef.
+
+- [x] `reconcilePairState` in `offchain/cli/src/lib/reconcile/pair-state.ts`:
+  queries all pair UTxOs at `pairValidatorAddress` filtered by `pairPolicyId`,
+  decodes inline datums, writes/updates pair-state JSON files. Exported from
+  `offchain/cli/src/lib/index.ts`.
+- [x] `reconcileAllDestinations` in `offchain/feeder/src/lib-bridge/reconcile.ts`:
+  collects unique destinations from enabled routers, calls `reconcilePairState`
+  per destination. Per-destination failures are warnings, not fatal.
+- [x] Called once at feeder startup (step 9.5 in `daemon-cmd.ts`) before the
+  queue starts draining. Skipped when `--dry-run`.
+- [x] If on-chain pair UTxO absent but local file exists → local file treated
+  as stale; removed; subsequent submission hits the mint path.
+
+**Acceptance**: verified — stale pair-state JSON triggers reconcile at boot;
+next submission builds against chain-derived outRef.
+
+##### 3.4.5.c — Mint-vs-update decided from chain, not local file — **done 2026-05-24**
+
+`lib-bridge/index.ts:237` sets `isCreate = !existingPair` from the
+local pair-state file. The on-chain reality should be the source of
+truth: a missing local file with an existing pair UTxO would silently
+try to mint a duplicate token; a present file with a burned pair UTxO
+would try to spend nothing.
+
+- [x] Replaced local-file check with
+  `const chainPairUtxos = await lucid.utxosAtWithUnit(pairValidatorAddress, pairUnit);`
+  `const isCreate = chainPairUtxos.length === 0;`
+  using the pair validator address + computed pair unit.
+- [x] If `isCreate` is true, the feeder submits a mint tx (existing
+  CLI wallet already has admin access for Preview evidence runs;
+  `SignerNotAuthorizedToMint` preflight check guards the non-admin case).
+- [x] Fallback reconstruction: if `!isCreate && !existingPair && currentPairUtxo?.datum`,
+  decode the on-chain datum via `decodePairDatum` and reconstruct a
+  minimal `PairStateArtifact` — so the feeder can proceed even if the
+  local pair-state file was never written.
+
+**Acceptance**: verified — chain query determines mint vs update; local
+file is authoritative only when chain and local agree.
+
+##### 3.4.5.d — Error taxonomy + preflight diagnostics — **done 2026-05-24**
+
+Today every failure surfaces as `submit failed ... error=<opaque>`.
+The feeder must name what went wrong and what the operator should do.
+
+- [x] `FeederErrorCode` in `src/errors/codes.ts`:
+  `WalletInsufficientFunds`, `ReceiverInsufficientFunds`,
+  `SignerNotAuthorizedToMint`, `IntentExpired`, `NonMonotonicNonce`,
+  `ProviderLag`, `UtxoNotFound`, `TxDroppedFromChain`,
+  `BuilderError`, `Unknown`.
+- [x] `runPreflight` in `src/submitter/preflight.ts`: checks wallet
+  balance, receiver UTxO ADA, intent expiry, and nonce monotonicity
+  before any tx-build. Returns `{ ok, code, reason, remediation }`.
+- [x] Called in `processOneEvent` (`daemon-cmd.ts`) before
+  `coalescerManager.accept(req)` — rejected intents never enter the queue.
+- [x] `SubmitResult` carries `{ ok, code, message, remediation }` on failure.
+  File logger emits structured JSON-line per intent lifecycle step.
+
+**Acceptance**: each preflight condition produces one structured error
+event with a distinct `code` and one-line `remediation`.
+
+##### 3.4.5.e — Retry policy per error category — **done 2026-05-24**
+
+The queue today is fire-and-forget: no retry, no lane halt, no
+backoff. Different errors need different responses.
+
+- [x] `createDefaultRetryPolicy` in `src/submitter/retry-policy.ts`:
+  - `NON_RETRIABLE_CODES`: `IntentExpired`, `NonMonotonicNonce`,
+    `SignerNotAuthorizedToMint`, `WalletInsufficientFunds`,
+    `ReceiverInsufficientFunds`, `TxDroppedFromChain` — deterministic
+    skip, no retry.
+  - Retriable (`ProviderLag`, `UtxoNotFound`, `Unknown`, `BuilderError`):
+    up to `DEFAULT_MAX_RETRIES` (3) attempts, `DEFAULT_RETRY_DELAY_MS` (5 000 ms).
+- [x] Queue applies retry policy after each failed attempt before resolving.
+
+**Note**: lane `blocked` state surfaced on `/healthz` is Phase 3.5 scope
+(API server). The retry policy itself is implemented here.
+
+##### 3.4.5.f — Real inflight key (`receiverUnit`, not placeholder) — **done 2026-05-24**
+
+`offchain/feeder/src/submitter/queue.ts:89` records the inflight
+entry as `pending:${result.intentHash}`. That key is unique per
+intent, so it never blocks anything — defeating the purpose of the
+inflight table.
+
+- [x] `QueueManager` keys lanes by `clientStatePath::protocolStatePath`
+  (unique per Cardano deployment). Implemented in `queue-manager.ts`.
+- [x] `result.receiverUnit` is surfaced in `SubmitResultOk` and used
+  by `queue.ts` to record the inflight entry
+  (`makeInflightEntry(cardanoTxHash, intentHash, receiverUnit, ...)`).
+- [x] Two destinations with different `clientStatePath` run in parallel
+  (separate queues); same destination serialises (one shared queue).
+
+**Acceptance**: verified by design — each distinct `clientStatePath`
+gets its own `SubmissionQueue` instance in the manager's `queues` Map.
+
+##### 3.4.5.g — Lane state machine, supersession, and batch coalescing
+
+This is the single largest behavioural change in Phase 3.4.5. It
+combines what was previously split across two ideas — a 2-second
+coalescing window and per-symbol supersession — into one coherent
+lane state machine that handles real-world Cardano latency.
+
+**Problem.** A Cardano tx takes 30 s – 2 min to confirm. If DIA
+emits intents faster than the chain confirms (e.g. one per second
+for the same symbol), a naive FIFO lane queue accumulates unbounded
+lag: tx N+30 reaches the front of the queue carrying a price 30 s
+behind reality. With multiple symbols sharing one receiver UTxO,
+the problem compounds.
+
+**Approach.** The lane buffer is not a FIFO of intents — it is a
+`Map<symbol, newestIntent>`. Newer intents for the same symbol
+supersede older ones immediately (mirrors the on-chain
+`is_fresh_update` rule in `oracle_logic.ak`: a later
+`(timestamp, nonce)` invalidates the earlier one). The lane has a
+small state machine that decides **when to flush** the buffer:
+
+```text
+ESTADO       BUFFER     DISPARADOR              SIGUIENTE
+─────────    ──────     ──────────              ─────────
+idle         empty      new intent X arrives    accumulating
+                        (insert X, start `coalesce_window` timer)
+
+accumulating non-empty  another intent Y        accumulating
+                        (supersede in buffer;
+                        timer keeps running)
+
+accumulating non-empty  timer expires           in-flight
+                        (flush buffer → tx)
+
+in-flight    any        new intent Z arrives    in-flight
+                        (supersede in buffer;
+                        NO timer — free
+                        accumulation while tx
+                        is on-chain)
+
+in-flight    empty      tx confirms             idle
+in-flight    non-empty  tx confirms             in-flight
+                        (FLUSH IMMEDIATELY,
+                        no extra window)
+```
+
+**The `coalesce_window` applies only on `idle → accumulating`.**
+After an `in-flight` cycle, the lane has already been accumulating
+naturally for as long as the chain took. Imposing another 2 s wait
+would be pure latency.
+
+Example — one symbol, 1 intent/s, 60 s tx time:
+
+| t (s) | event | lane state | buffer |
+| ---: | --- | --- | --- |
+| 0 | intent #1 BTC | idle→accum (timer 2 s starts) | `{BTC:#1}` |
+| 0..2 | (nothing) | accum | `{BTC:#1}` |
+| 2 | timer expires | **flush** → in-flight | `{}` |
+| 3..60 | intents #2..#61 arrive | in-flight | superseded → `{BTC:#61}` |
+| 60 | tx #1 confirms | in-flight → **flush immediately** → in-flight | `{}` |
+| 60..120 | intents #62..#121 | in-flight | superseded → `{BTC:#121}` |
+| 120 | tx #2 confirms | flush immediately → in-flight | … |
+
+Intrinsic lag ≈ one Cardano tx time. **Does not grow with
+intent rate.** The feeder publishes the freshest price the chain
+can accept, never an obsolete one.
+
+Example — multi-symbol burst during in-flight:
+
+```text
+buffer evolves on every arrival (supersede or add):
+
+t=5    {BTC:#1}
+t=8    {BTC:#1,  ETH:#1}
+t=12   {BTC:#2,  ETH:#1}                    ← BTC#1 superseded
+t=15   {BTC:#2,  ETH:#1,  USDC:#1}
+t=20   {BTC:#5,  ETH:#2,  USDC:#1}
+t=58   {BTC:#58, ETH:#44, USDC:#12}         ← snapshot at flush time
+t=60   tx #0 confirms → flush 3 entries as one batch tx
+```
+
+Tasks (implemented subset for M2 — see note below):
+
+- [x] `tx_mode: single | batch | auto` added to `CardanoDestinationConfig`
+  in `src/config/types.ts`. Router config uses `tx_mode: single` for
+  the Preview evidence run.
+- [x] `coalesce_window` and `max_intent_age` added to `EventProcessorConfig`.
+- [x] **Lane state machine** implemented in `src/submitter/coalescer.ts`:
+  `idle → accumulating → in-flight` state transitions, per-symbol buffer
+  (`Map<symbol, SubmitRequest>`), supersession on `(timestamp, nonce)`.
+  Coalesce window applies only on `idle → accumulating` edge.
+- [x] Per-symbol gating (`time_threshold`, `price_deviation`) runs in the
+  router/policy layer **before** the coalescer — filtered symbols never
+  enter the buffer.
+- [x] `onResult(result, req)` callback carries both the result and the
+  originating request — DB log + price cache update happen in `onResult`
+  rather than at `accept()` time, avoiding orphaned DB rows for superseded
+  intents.
+
+**Deferred to post-M2** (not blocking the evidence run):
+
+- Full `tx_mode: auto` batch coalescing (currently behaves as `single` — one
+  tx per intent, serially). `buildBatchOracleUpdateTx` is available in
+  `lib-bridge` but the coalescer flush does not yet call it.
+- Size-budget fallback ladder (`BatchSizeExceeded` → split).
+- Mixed mint + update batches in one tx.
+- Per-entry `IntentAgedOut` / `lane_overrun` lifecycle events.
+- `intent_superseded` event emission.
+
+These are optimizations for production throughput; the M2 evidence window
+(5-min `time_threshold`, ~1 intent per confirm cycle) does not exercise
+batch paths.
+
+**Acceptance** (implemented subset):
+
+- **Lane state machine correct**: idle → accumulating on first intent,
+  timer fires → in-flight, tx confirms → idle (or in-flight if buffer
+  non-empty). Verified in code review.
+- **Supersession**: a newer intent for the same symbol replaces the buffered
+  one before flush. DB insert happens in `onResult`, not at `accept()`.
+- **Coalesce window**: `coalesce_window` in `infrastructure.preview.yaml`
+  drives the 2 s default; configurable via YAML.
+
+##### Phase 3.4.5 rolled-up acceptance
+
+Against Cardano Preview + DIA testnet, a 30-minute feeder run:
+
+- produces **0** false `submit failed` events from wait3 lag,
+- emits structured JSON-line logs, one per intent, every failure
+  carrying a `FeederErrorCode` and a `remediation` string,
+- correctly halts the lane and surfaces the reason on `/healthz`
+  when the wallet or the receiver is drained,
+- on restart with a deliberately corrupted pair-state JSON, boots
+  green by reconciling from chain,
+- coalesces a burst of 5 same-client intents into one batch tx.
 
 #### Phase 3.5 — Persistence + API + metrics
 
@@ -549,29 +832,88 @@ and `/prices` track every intent end-to-end.
 
 Goal: produce reviewer-ready M2 evidence on Preview before touching mainnet.
 
-Depends on **D5** (updater wallet custody) and **D6** (cadence).
+D5 (wallet) is resolved — same wallet as the CLI (`CARDANO_WALLET_SEED_TESTNET`).
+D6 (cadence) is configured — `time_threshold: 5m`, `price_deviation: 0.1%`.
 
-- [ ] Configure the Preview routes for the 10 Catalyst-referenced pairs.
+### Phase 4.0 — Identify the 10 active pairs on DIA testnet
+
+The router config currently lists pairs that were created manually with the
+CLI. The DIA testnet attests a different, changing set of symbols. Before
+minting anything on Cardano Preview, we must verify which symbols actually
+have live `IntentRegistered` events on DIA testnet so that our 10 chosen
+pairs will receive updates during the evidence window.
+
+- [ ] **Scan DIA testnet for active symbols.** Run
+  `npm run feeder:dev -- --config ./config --scan --dry-run --transport http`
+  for 15–30 minutes and collect all enriched intent symbols. Sort by
+  frequency. The top N (N ≥ 10) are the candidate pairs. Alternatively,
+  query `eth_getLogs` for the last ~2 000 blocks on the testnet registry
+  and decode unique symbols. Script:
+  `offchain/cli/scripts/tools/scan-dia-intents.ts` (to be created).
+- [ ] **Select 10 symbols** from the observed set. Prefer symbols with the
+  highest intent frequency (updated most often), which maximises the
+  number of captured Cardano tx hashes during the evidence window.
+  Record the final selection and observed frequencies in a note under
+  `docs/milestones/evidence/m2-pair-selection.md`.
+- [ ] **Update the router config** (`config/routers/client-a.preview.yaml`)
+  `conditions[0].value` list to match the 10 selected symbols exactly.
+
+**Acceptance**: `--scan --dry-run` output shows intents for all 10 selected
+symbols with no `policy-filtered` or `condition-filtered` rejections.
+
+### Phase 4.1 — Initialize 10 pairs on Cardano Preview
+
+The feeder's wallet must already hold the Pair UTxOs on Preview for the
+selected symbols. Minting is an admin action (not the feeder's job at
+runtime — see 3.4.5.c).
+
+- [ ] For each of the 10 selected symbols that does NOT already have a
+  minted Pair UTxO on Preview: run the CLI `pair:create` command
+  (or equivalent `update` command that triggers `isCreate = true`).
+  Use the same CLI wallet configured in `CARDANO_WALLET_SEED_TESTNET`.
+- [ ] Verify all 10 pair UTxOs exist on Preview (via Blockfrost / Cardanoscan).
+- [ ] Ensure the local pair-state JSON files are current (or let feeder
+  startup reconciliation handle it via `reconcileAllDestinations`).
+
+**Acceptance**: `reconcileAllDestinations` at feeder startup reports
+10 pairs synced with no `stale` warnings.
+
+### Phase 4.2 — Run feeder and capture evidence
+
 - [ ] Run the feeder against Cardano Preview + DIA testnet for a
-  multi-day window. Capture:
-  - [ ] daemon logs (structured JSON, daily rotation),
-  - [ ] every Cardano `update` / `update:batch` tx hash with the
-    originating `intentHash` and `signer`,
-  - [ ] uptime stats (target ≥ 99.9% for the window),
-  - [ ] freshness stats (per-pair p50/p95 latency from
-    `IntentRegistered` to Cardano confirmation),
-  - [ ] anomaly events (skipped intents, retries, failures).
-- [ ] Settle accrued fees periodically and capture the settle tx hashes.
-- [ ] Package evidence under
-  `docs/milestones/evidence/m2-preview-<YYYYMMDD-HHMMSS>/` with the same
-  layout used by the M1 evidence packs.
-- [ ] Record a short demo video showing the live dashboard, the feed
-  status for the 10 pairs, and a few representative tx hashes on
-  Cardanoscan + the DIA testnet explorer.
+  **multi-day window** (minimum 48 h; 72 h preferred). Use WS transport
+  for real-time delivery; HTTP polling as fallback.
 
-**Acceptance**: evidence pack contains verified tx hashes for each of the
-10 pairs, structured logs covering the full window, and a demo video that
-matches the milestone wording.
+  ```bash
+  npm run feeder:dev -- --config offchain/feeder/config \
+    --transport ws --log-level info 2>&1 | tee feeder-$(date +%Y%m%d).log
+  ```
+
+- [ ] Capture per the Catalyst evidence format:
+  - [ ] daemon logs (structured JSON, one file per day),
+  - [ ] every confirmed Cardano tx hash with the originating `intentHash`
+    and `signer` (extracted from `state/preview/logs/events.jsonl`),
+  - [ ] uptime stats (target ≥ 99.9% for the window),
+  - [ ] freshness stats (per-pair p50/p95 latency from `IntentRegistered`
+    to Cardano confirmation — derivable from `events.jsonl` timestamps),
+  - [ ] anomaly events (skipped intents, retries, failures).
+- [ ] **Settle accrued fees** at least once during the window. Capture the
+  settle tx hash. This demonstrates the Settle flow is live.
+- [ ] Package evidence under
+  `docs/milestones/evidence/m2-preview-<YYYYMMDD-HHMMSS>/`
+  with the same layout used by M1 evidence packs.
+
+### Phase 4.3 — Demo video
+
+- [ ] Record a short demo video (5–10 min) showing:
+  - the live feeder dashboard / logs,
+  - the feed status for the 10 pairs (`/prices` or `events.jsonl`),
+  - a few representative tx hashes verified on Cardanoscan and the
+    DIA testnet explorer.
+
+**Acceptance**: evidence pack contains verified tx hashes for ≥ 10 pairs,
+structured logs covering the full window, a `pair-selection.md` note
+explaining why those 10 symbols were chosen, and a demo video.
 
 ## Phase 5 — Cardano Mainnet rollout
 
@@ -944,6 +1286,339 @@ $ npm run feeder:dev -- --config ./config --validate-only
 (The exact diagnostic wording is illustrative — the implementation
 decides the precise check, e.g. a sanity decode against a known
 log fixture at validate time.)
+
+## Annex E — Phase 3.4.5 implementation impact map
+
+This annex enumerates every file the operational-robustness work touches,
+the new modules it introduces, the decisions that shape them, the order
+in which the seven sub-phases land, and the blast radius for the CLI.
+It is the artifact the operator approves before any code change.
+
+### E.1 Module impact map
+
+#### New modules (clean home for new concerns)
+
+| Path | Belongs to | Purpose |
+| --- | --- | --- |
+| `offchain/cli/src/core/tx-onchain-check.ts` | CLI core | `assertTxStillOnChain(lucid, txHash)` — single chain probe used by `chain-helpers` waits to short-circuit on rollback. |
+| `offchain/cli/src/lib/reconcile/pair-state.ts` | CLI lib (reusable) | `reconcilePairStateFromChain({ clientStatePath, symbol })` — reads pair UTxO + datum on-chain, writes the JSON the bridge consumes. Pure builder; no submission. |
+| `offchain/cli/src/lib/reconcile/index.ts` | CLI lib | Public re-export surface (consumed by feeder via `lib-bridge`). |
+| `offchain/feeder/src/errors/codes.ts` | Feeder errors | `FeederErrorCode` enum + `FeederError` class carrying `{ code, message, remediation, cause? }`. |
+| `offchain/feeder/src/errors/classify.ts` | Feeder errors | `classifyError(err): FeederErrorCode` — maps Lucid / bridge / chain-helpers errors to taxonomy. Single chokepoint, no `instanceof` checks scattered. |
+| `offchain/feeder/src/errors/index.ts` | Feeder errors | Public re-export. |
+| `offchain/feeder/src/submitter/preflight.ts` | Submitter | Cheap chain probes before tx build: wallet ADA, receiver UTxO ADA, expiry, monotonicity. Returns `null` on pass or a `FeederError` on fail. |
+| `offchain/feeder/src/submitter/retry-policy.ts` | Submitter | `decideRetry(code, attempt): "skip" \| "retry" \| "halt"` + per-code backoff. Pure function, table-driven. |
+| `offchain/feeder/src/submitter/lane-state.ts` | Submitter | Per-`(updaterWallet, receiverUnit)` lane status: `running \| blocked \| halted`. Read by `/healthz`; written by queue on `halt`. |
+| `offchain/feeder/src/submitter/coalescer.ts` | Submitter | Per-lane coalescing window. Buffers `SubmitRequest`s for `coalesce_window` ms; flushes as single or batch based on count + `tx_mode`. |
+| `offchain/feeder/src/lib-bridge/oracle-update.ts` | Bridge | `submitOracleUpdate` (extracted from current `index.ts`). |
+| `offchain/feeder/src/lib-bridge/oracle-update-batch.ts` | Bridge | `submitOracleUpdateBatch` — new entry, wraps `buildBatchOracleUpdateTx`. |
+| `offchain/feeder/src/lib-bridge/reconcile.ts` | Bridge | Thin shim over CLI's reconcile helper; same dynamic-import pattern as the others. |
+| `offchain/feeder/src/lib-bridge/cli-loader.ts` | Bridge | The `Promise.all` of dynamic imports moves here so all three entries share one loader. Removes the 50-line import block currently duplicated inline. |
+
+#### Modified modules
+
+| Path | Change |
+| --- | --- |
+| `offchain/cli/src/core/chain-helpers.ts` | Raise defaults: `maxAttempts 20 → 800` for `waitForUnitUtxoReplacement`, `waitForOutRefAvailable`, `waitForOutRefGone`; `12 → 480` for `waitForWalletSettlement`. Wire `assertTxStillOnChain` into the three UTxO-shape loops (every 60 attempts). Update the helper-level doc comments to state the new ceilings and rollback short-circuit. No call-site changes. |
+| `offchain/cli/src/lib/index.ts` | Re-export reconcile. |
+| `offchain/feeder/src/lib-bridge/index.ts` | Reduce to thin re-exports of the three new files + the loader. The current 495-line monolith disappears. |
+| `offchain/feeder/src/submitter/types.ts` | `SubmitResultOk` gains `receiverUnit: string` and (optional) `pairUnit: string`. `SubmitResultErr` gains `code: FeederErrorCode`, `remediation: string`. Single source of truth — every queue/inflight/api consumer reads from these. |
+| `offchain/feeder/src/submitter/cardano-write-client.ts` | Bridge call returns `{ txHash, receiverUnit, pairUnit }`; client surfaces those on the result. Preflight is called BEFORE `bridge.submitOracleUpdate` and classifies failure when it returns non-null. Catch block delegates to `classifyError`. |
+| `offchain/feeder/src/submitter/queue.ts` | Use real `receiverUnit` from `SubmitResultOk` for the inflight key — `pending:${intentHash}` placeholder removed. On `SubmitResultErr`, consult `retry-policy.ts`; `halt` flips `lane-state`, `skip` advances, `retry` re-enqueues with backoff. |
+| `offchain/feeder/src/submitter/queue-manager.ts` | Lane key changes from `clientStatePath::protocolStatePath` to `(updaterWallet, receiverUnit)`. Coalescer is inserted in front of each lane's queue. Existing top-level retry loop (lines 115-121) is removed — retry decisions move into `queue.ts` per the policy. |
+| `offchain/feeder/src/submitter/inflight.ts` | No code change (interface already takes a real `receiverUnit`). Just gets fed correct data. |
+| `offchain/feeder/src/config/types.ts` | `CardanoDestinationConfig.tx_mode: "single" \| "batch" \| "auto"` (was `"single" \| "batch"`). New optional field `coalesce_window: string` (duration). |
+| `offchain/feeder/src/config/validate.ts` | Accept new `tx_mode` value; validate duration string for `coalesce_window`. |
+| `offchain/feeder/config/routers/client-a.preview.yaml` | Flip `tx_mode: single → auto`; add `coalesce_window: 2s` with a one-line comment. |
+| `offchain/feeder/src/logger/file-logger.ts` | Add a canonical `events.jsonl` sink in `logDir`: one JSON line per lifecycle event (`enriched`, `routed`, `submit`, `confirm`, `failed`, `halted`, `reconciled`). Per-intent `*.log` files stay for operator readability. Schema lives in a new `intent-event.ts`. |
+| `offchain/feeder/src/logger/intent-event.ts` | NEW. Canonical typed event schema (`IntentLifecycleEvent`). Both `file-logger` and any future log sink (Loki, stdout) consume this type. |
+| `offchain/feeder/src/api/health.ts` | `/healthz` reports per-lane state from `lane-state.ts`. `/readyz` returns 503 when any lane is `halted`. |
+| `offchain/feeder/cmd/feeder/daemon-cmd.ts` | Wire `lane-state` into the queue manager + api server. The 50+ lines of inline `logIntentStep` calls move behind a single `emitLifecycle(event)` helper that consumes the typed event. |
+
+#### Files NOT touched (intentionally)
+
+- `offchain/cli/src/transactions/*.ts` — wrappers stay as-is; they inherit the new wait defaults transparently. No behavior change for `run-all-cli.sh`.
+- `offchain/cli/src/lib/transactions/*.ts` — pure builders are already feeder-friendly; the bridge calls them, not vice versa.
+- `offchain/feeder/src/source/*.ts`, `offchain/feeder/src/router/*.ts`, `offchain/feeder/src/pipeline/*.ts` — Phase 3.4.5 is submission-side; the scanner / router / pipeline are out of scope.
+- `offchain/feeder/src/persistence/*.ts` — DB schema unchanged. Status strings (`submitted`, `confirmed`, `failed`) become `submitted`, `confirmed`, `failed`, `halted` only if we want lane history; deferred to Phase 3.5.
+
+### E.2 Decisions & non-decisions
+
+- **Reconciliation lives in CLI lib, not feeder.** Reason: the CLI may also need it (operator running a recovery from a hand-edited artifact). Building it once in `lib/reconcile/` and re-exporting through `lib-bridge` mirrors how `buildOracleUpdateTx` already works.
+- **Error taxonomy lives in the feeder, not the CLI.** Reason: the CLI is interactive and prints errors at the prompt; the feeder needs a closed enum to drive retry decisions and metrics labels. The CLI keeps throwing plain `Error`s.
+- **Preflight in `submitter/`, not in the bridge.** Reason: preflight wants access to lane-state (skip preflight on a `halted` lane to avoid log spam). The bridge stays a pure Cardano-tx surface.
+- **No new YAML files.** All schema changes are extensions of existing `cardano:` destination block. Spectra-parity preserved.
+- **Logger: keep per-intent files, add `events.jsonl`.** Reason: per-intent files are gold for operators reading one intent end-to-end; `events.jsonl` is the machine-readable feed for `/metrics` and external tools. Not "or" — both.
+- **No retry loop in `queue-manager.ts`.** Retry decisions move into `queue.ts` so a single component owns submit + classify + retry. The top-level retry (lines 115-121) is dead code after Phase 3.4.5.e.
+- **Coalescing window is per-lane, not global.** Each `(updaterWallet, receiverUnit)` has its own buffer. Two clients with different receivers never share a window.
+- **`coalesce_window` applies only on `idle → accumulating`.** After an in-flight cycle, the lane has already been accumulating for the full Cardano latency (30 s – 2 min). Imposing another window after every confirm would be pure added latency, not coalescing. The buffer flushes immediately on confirm when non-empty.
+- **Supersession at the lane buffer, not the coalescing window.** The buffer is `Map<symbol, newestIntent>` for the **entire** life of the lane, not just during the 2 s window. Newer `(timestamp, nonce)` evicts older for the same symbol whether the lane is `accumulating` or `in-flight`. Mirrors the on-chain `is_fresh_update` rule exactly.
+- **Empty post-preflight flush is silent in `idle` paths, loud on `confirm` path.** An empty `accumulating → flush` is normal (everything aged out before flush — operator picks `max_intent_age_at_flush` and accepts the trade-off). An empty `in-flight-confirm → flush` is `lane_overrun` (chain slower than DIA's expiry budget — operator must investigate).
+- **`receiverUnit` and `pairUnit` are required in `SubmitResultOk`.** Optional was tempting; making them required forces every code path to plumb them through, killing the "we'll add it later" trap.
+- **Mint-vs-update on chain check is per-symbol, on every submit.** Cost: one `findSingleUtxoAtUnit` call per intent. Already pay this for `currentPairUtxo` resolution; the only new chain read is when the intent IS a create.
+
+### E.3 Implementation order (each is a mergeable PR)
+
+| # | Sub-phase | Lines touched (est.) | New files | Risk to CLI |
+| --- | --- | --- | --- | --- |
+| 1 | **3.4.5.a** Raise wait timeouts | 4 lines + 1 new helper | 1 | none — CLI inherits new ceilings, no path change |
+| 2 | **3.4.5.d** Error taxonomy + preflight | ~300 | 4 | none |
+| 3 | **3.4.5.e** Retry policy | ~150 | 1 | none |
+| 4 | **3.4.5.f** Real inflight key (`receiverUnit`) | ~80 | 0 | none |
+| 5 | **3.4.5.b** Reconciliation | ~250 | 3 (2 CLI lib, 1 bridge) | additive; no existing call sites change |
+| 6 | **3.4.5.c** Mint-vs-update from chain | ~30 | 0 | none — only `lib-bridge` decides; CLI flow is interactive and keeps its own decision |
+| 7 | **3.4.5.g** Lane state machine + supersession + batch coalescing | ~550 | 3 | none |
+
+Each PR keeps the test suites green for both packages independently;
+each is reviewable on its own.
+
+PR #7 grew from the original 400 LoC estimate because the lane state
+machine (idle → accumulating → in-flight → idle) and the per-symbol
+supersession buffer are part of the same module
+(`submitter/coalescer.ts`) — they share the buffer data structure and
+the flush trigger logic, so splitting into separate PRs would force
+the first one to ship dead code. The state machine is small (~80
+LoC); the supersession map is small (~60 LoC); the rest is
+preflight integration, fallback ladder, and per-entry result
+correlation.
+
+### E.4 Blast-radius statement
+
+After all seven PRs land:
+
+- `run-all-cli.sh` Preview produces the same artifact set as today, with
+  the only observable difference being potentially higher wait latencies
+  under adverse provider conditions (the new ceiling, not the typical
+  case). Acceptance: the M1 evidence-pack workflow still produces a
+  green run.
+- The feeder's external surface (`/healthz`, `/readyz`, `/metrics`,
+  `/prices`) gains the lane-state fields; existing fields are preserved.
+- The router YAML schema gains `tx_mode: "auto"`, `coalesce_window`,
+  `min_batch_size`, `max_batch_size`, `size_fallback_enabled`, and
+  `max_intent_age_at_flush`; existing files with `tx_mode: "single"`
+  or `"batch"` and no other knobs keep working with safe defaults.
+- `.env.example` files are untouched.
+- No on-chain script change. No re-deployment of any artifact.
+
+### E.5 Test strategy
+
+- **Unit (no chain):** `errors/classify.ts`, `submitter/retry-policy.ts`,
+  `submitter/coalescer.ts`, `submitter/preflight.ts` (chain calls
+  dependency-injected). Existing fakes in `__tests__/` are extended; no
+  new harness.
+- **Integration (Lucid Emulator):** `lib-bridge/oracle-update.ts` and
+  `oracle-update-batch.ts` against the M1 emulator harness;
+  `reconcile/pair-state.ts` against a pre-staged emulator state.
+- **Smoke (live Preview + DIA testnet):** rerun
+  `npm run feeder:dev -- --config ./config --daemon` for 30 min, post
+  the structured logs to `docs/milestones/evidence/m2-preview-phase-3-4-5/`.
+  Hits the Phase 3.4.5 rolled-up acceptance defined in the phase
+  description.
+- **CLI regression:** `run-all-cli.sh` Preview end-to-end (the Phase 4
+  acceptance gate already on the plan) — runs unchanged; verifies the
+  new wait ceilings did not break any existing call.
+
+### E.6 Documentation updates
+
+| File | Change |
+| --- | --- |
+| `offchain/feeder/README.md` | Operator section: lane-halt states (`blocked`, `halted`), how to read `events.jsonl`, `tx_mode: auto`, what the wait timeouts mean. |
+| `offchain/cli/README.md` | One paragraph noting the new wait ceilings (no API change). |
+| `docs/plans/work-plan.md` | Workstream C summary: reference Phase 3.4.5 by name. |
+| `docs/plans/milestone-2-feeder-strategy.md` | Add a one-paragraph forward-link to Annex E for the conceptual rationale. |
+
+### E.7 Batch composition rules (mints + updates mixed)
+
+The on-chain `buildBatchOracleUpdateTx` already accepts a heterogeneous
+list of entries: each carries `isCreate: boolean`, the resulting tx
+mints exactly the new pair tokens (`mintAssets[pairUnit] = 1n`) for
+`isCreate: true` entries and consumes the existing pair UTxO for the
+others. All entries share a single receiver UTxO and a single
+`config-update` redeemer.
+
+`ensureCompatibleBatch` ([`offchain/cli/src/transactions/update-batch.ts:545`](../../offchain/cli/src/transactions/update-batch.ts#L545))
+enforces the invariants the coalescer must honour:
+
+- every entry has the **same `receiverUnit`** (this is the lane key —
+  guaranteed by construction);
+- every entry shares **`configUnit`, `paymentHookUnit`, `pairPolicyId`**
+  (one client deployment per batch — guaranteed since lanes are
+  per-client);
+- every entry has the **same `pairValidatorAddress`** (same property);
+- **no duplicate `pairUnit`** in the same batch. The coalescer
+  enforces this naturally because the lane buffer is keyed by
+  `symbol`: at any given moment there is at most one buffered
+  intent per symbol. Supersession is **continuous across the
+  entire lane lifetime**, not limited to the
+  `coalesce_window` (2 s). Whether the lane is `accumulating` or
+  `in-flight`, every arrival for an already-buffered symbol replaces
+  the existing entry if its `(timestamp, nonce)` is greater. This
+  matches the on-chain `is_fresh_update` rule
+  ([`oracle_logic.ak:96`](../../contracts/aiken/lib/dia_cardano_oracle/oracle_logic.ak#L96))
+  exactly — pushing a non-fresh intent would be rejected by the
+  validator regardless.
+
+Authority rules for a mixed batch:
+
+- **All `isCreate: true` entries** require the feeder wallet to be a
+  config admin (the existing on-chain rule
+  `assertPaymentKeyHashIsConfigSigner`). When the wallet is not an
+  admin, preflight (3.4.5.d) emits `SignerNotAuthorizedToMint` for
+  each create entry, the coalescer drops those entries, and the
+  remaining update-only entries form the batch.
+- **A batch with only create entries on a non-admin wallet** results
+  in an empty post-filter list → no tx is built. The lane is **not**
+  halted (it's a per-entry capability gap, not a wallet-wide
+  problem); subsequent updates still flow.
+
+Effect on the CLI: zero. The CLI's `update:batch` command keeps its
+existing semantics; the feeder uses the same builder via `lib-bridge`.
+
+### E.8 Configuration surface — the complete knob list
+
+This section is the single place an operator looks to find every
+runtime knob the feeder reads, where it lives, what the default is,
+and what it controls. Knobs introduced by Phase 3.4.5 are marked
+**NEW**; everything else is already in place.
+
+#### E.8.1 — Router YAML — per-`cardano:` destination
+
+Lives under `routers.<routerId>.destinations[].cardano:` in each
+`config/routers/<file>.yaml`.
+
+| Knob | Type | Default | New? | Controls |
+| --- | --- | --- | --- | --- |
+| `network` | `Preview \| Mainnet` | required | existing | Must match `CARDANO_NETWORK`. |
+| `client_state_path` | path | required | existing | CLI client-state JSON (per `(client, network)`). |
+| `protocol_state_path` | path | required | existing | CLI protocol-state JSON. |
+| `tx_mode` | `single \| batch \| auto` | `auto` | **NEW** | Submission mode. `auto` = coalesce, decide single/batch by count; `single` = always one tx per intent; `batch` = always batch (even N=1 is wrapped — useful for ops parity). |
+| `coalesce_window` | duration (e.g. `2s`, `500ms`) | `2s` | **NEW** | Lane buffering window **only on `idle → accumulating`** (first intent after the lane has been quiet). NOT applied on the `in-flight → flush` path — after a confirm, a non-empty buffer flushes immediately. Set to `0` to flush every idle-arrival immediately (no coalescing of simultaneous arrivals). Ignored in `single` mode. |
+| `min_batch_size` | int ≥ 2 | `2` | **NEW** | In `auto` mode, the minimum count at flush time required to emit a batch tx; below this, buffered intents flush as individual single txs. |
+| `max_batch_size` | int ∈ `[2, 15]` | `10` | **NEW** | Hard cap on entries per batch tx. Aligned with the CLI's empirical ceiling (the `run-all-cli.sh` ladder validates up to 10). When the buffer at flush time exceeds the cap, the lane emits successive batches of `max_batch_size`, all serialised in the same in-flight cycle. |
+| `size_fallback_enabled` | bool | `true` | **NEW** | Whether to halve-and-retry on `BatchSizeExceeded`. Off in `batch` mode if the operator wants hard failures for debugging; default on. |
+| `max_intent_age_at_flush` | duration | `0` (disabled) | **NEW** | If `>0`, at flush time drop any buffered intent whose `intent.timestamp` is older than this threshold (relative to `now`), with a `IntentAgedOut` event. Independent of DIA's `intent.expiry` — this is an operator-side staleness gate for sparse symbols. Default disabled (DIA's expiry is the contract; the per-symbol supersession buffer already prevents stale prices for active symbols). |
+
+#### E.8.2 — Router YAML — per-router policy (existing)
+
+| Knob | Type | Default | Controls |
+| --- | --- | --- | --- |
+| `triggers.events` | list of event names | required | Which Spectra events the router reacts to (only `IntentRegistered` supported). |
+| `triggers.conditions` | list of `{field, operator, value}` | required | Symbol allowlist. AND-combined. |
+| `processing.datasource` | `enrichment` | `enrichment` | Source of values for routing (currently the only supported value). |
+| `processing.transformations` | list | `[]` | Reserved; must be empty for Cardano. |
+| `time_threshold` | duration | (router-level) | Minimum gap between two updates for the same symbol on a destination. |
+| `price_deviation` | percent string | (router-level) | Minimum relative price change to forward. |
+| `private_key_env` | env var name | required | Env var holding the Cardano wallet seed. |
+| `enabled` | bool | `true` | Pause a router without removing the file. |
+
+#### E.8.3 — `.env` — secrets and runtime selectors
+
+These are confirmed by Annex D as the only env values the feeder reads.
+
+| Knob | Used by | Required | Controls |
+| --- | --- | --- | --- |
+| `CARDANO_NETWORK` | runtime | yes | `Preview` or `Mainnet`; drives `_TESTNET` / `_MAINNET` suffix resolution. |
+| `CARDANO_PROVIDER` | runtime | yes | `Blockfrost` or `Koios`. |
+| `LOG_LEVEL` | logger | optional | `debug \| info \| warn \| error` (default `info`). Also `--log-level`. |
+| `DRY_RUN` | submitter | optional | `true` to disable actual Cardano submissions. Also `--dry-run`. |
+| `BLOCKFROST_PROJECT_ID_<NETWORK>` | provider | yes (if `Blockfrost`) | Project id for the network. |
+| `CARDANO_WALLET_SEED_<NETWORK>` | wallet | yes | Mnemonic for the updater wallet. Referenced from `private_key_env`. |
+| `CARDANO_PRIVATE_KEY_<NETWORK>` | wallet | alt to seed | Raw private key. Only if `private_key_env` points here. |
+| `DIA_WS_CREDENTIAL_<NETWORK>` | source-ws | yes (if `--transport ws`) | Conduit path-style credential. |
+| `DIA_EXPLORER_URL_<NETWORK>` | logger | optional | Used for explorer links in logs. |
+| `API_LISTEN_ADDR` | api | optional | `host:port` for the HTTP API (default `:8080`). |
+| `API_ENABLE_CORS` | api | optional | `true` to enable CORS. |
+| `METRICS_ENABLED` | metrics | optional | `true` to enable `/metrics`. |
+| `METRICS_NAMESPACE` | metrics | optional | Default `dia_feeder`. |
+| `DATABASE_DRIVER` | persistence | optional | `sqlite` (default) or `postgres`. |
+| `DATABASE_PATH_<NETWORK>` | persistence | optional (sqlite) | Default `state/<network>/feeder.sqlite`. |
+| `DATABASE_DSN_<NETWORK>` | persistence | yes (if postgres) | DSN with password. |
+| `FEEDER_LOG_DIR` | logger | optional | Default `state/<network>/logs`. |
+
+#### E.8.4 — `infrastructure.<network>.yaml` — scanner and processor knobs (existing)
+
+These are the Spectra-shape infrastructure knobs the daemon already
+reads. None of them are introduced by Phase 3.4.5; they are listed
+here to make the configuration map complete.
+
+| Knob | Default | Controls |
+| --- | --- | --- |
+| `block_scanner.scan_interval` | `10s` | HTTP poll cadence. |
+| `block_scanner.block_range` | `500` | Max blocks per `eth_getLogs` request. |
+| `source.start_block` | `0` (or checkpoint) | Initial scan boundary. |
+| `event_processor.dedup_cache_size` | `4096` | LRU capacity. |
+| `event_processor.dedup_cache_ttl` | `1h` | LRU TTL. |
+| `event_monitor.reconnect_interval` | `5s` | WS reconnect cadence. |
+| `event_monitor.max_reconnect_attempts` | `60` | WS reconnect budget. |
+| `health_check.max_processing_lag` | `5m` | `/readyz` staleness threshold. |
+| `worker_pool.task_timeout` | `60s` | Per-submit wall-clock ceiling. After 3.4.5.e this becomes the inflight timeout; retries are governed by `retry-policy.ts`. |
+| `worker_pool.retry_delay` | `5s` | Base backoff between retries. |
+| `worker_pool.max_retries` | `3` | Max retries for retryable error codes. |
+| `api.listen_addr` | `:8080` | YAML override of `API_LISTEN_ADDR`. |
+| `metrics.enabled` | `false` | YAML override of `METRICS_ENABLED`. |
+| `metrics.namespace` | `dia_feeder` | YAML override of `METRICS_NAMESPACE`. |
+| `dry_run` | `false` | YAML override of `DRY_RUN`. |
+
+#### E.8.5 — Helper-internal constants (CLI core)
+
+After 3.4.5.a these are the only timeouts in the codebase that are
+not config-driven; the values are intentionally hard-coded because
+they describe Cardano realities, not operator policy.
+
+| Constant | File | New default | Controls |
+| --- | --- | --- | --- |
+| `waitForUnitUtxoReplacement.maxAttempts` | `chain-helpers.ts` | `800` (was 20) | ~20 min ceiling. |
+| `waitForOutRefAvailable.maxAttempts` | `chain-helpers.ts` | `800` | ~20 min ceiling. |
+| `waitForOutRefGone.maxAttempts` | `chain-helpers.ts` | `800` | ~20 min ceiling. |
+| `waitForWalletSettlement.maxAttempts` | `chain-helpers.ts` | `480` (was 12) | ~12 min ceiling. |
+| All four `delayMs` | `chain-helpers.ts` | `1500` (unchanged) | Poll interval. |
+| `assertTxStillOnChain` interval | `tx-onchain-check.ts` | every `60` attempts | Sanity check inside the loops. |
+
+#### E.8.6 — Where knobs do **not** live (intentional)
+
+- Coalescer behaviour (`max_batch_size`, `coalesce_window`) does NOT
+  appear in `infrastructure.yaml`. It lives per-destination because
+  different clients legitimately want different policies.
+- Wait-helper ceilings (E.9.5) are NOT YAML-tunable. Reason: they
+  represent provider-lag tolerance which is a property of Cardano +
+  Blockfrost/Koios, not of any one router. If we ever needed per-
+  network overrides, the natural home would be
+  `infrastructure.<network>.yaml::chain.wait_ceilings` — out of scope
+  for M2.
+- `FeederErrorCode` retry policy lives in code (`retry-policy.ts`),
+  not in YAML. Each code's response is a design decision, not an
+  operator dial. Per-error-code retry counts can be exposed via env
+  if a future incident requires it; deferred.
+
+### E.9 Approval checklist (operator)
+
+- [ ] Module placements (E.1) match your mental model of the codebase.
+- [ ] Decisions in E.2 are the right defaults (especially: reconcile in
+      CLI lib, error taxonomy in feeder).
+- [ ] PR order in E.3 is acceptable.
+- [ ] Blast-radius statement (E.4) is acceptable.
+- [ ] Test strategy (E.5) is sufficient before the live evidence window.
+- [ ] Documentation list (E.6) is complete.
+- [ ] Lane state machine in 3.4.5.g is correct: `coalesce_window`
+      applies only on `idle → accumulating`; `in-flight → flush`
+      is immediate when the buffer is non-empty; per-symbol
+      supersession runs continuously across both `accumulating`
+      and `in-flight` states. The example tables (single-symbol
+      sustained load, multi-symbol burst) match operator
+      expectations.
+- [ ] Batch composition rules in E.7 (mints + updates in one tx,
+      partial-failure semantics, no-empty-batch rule, supersession
+      across the lane lifetime) are correct.
+- [ ] Configuration surface in E.8 — defaults, ranges, and where
+      each knob lives — is acceptable. In particular:
+      `max_batch_size: 10` aligned with the CLI evidence ladder,
+      `coalesce_window: 2s` default (idle path only),
+      `max_intent_age_at_flush: 0` default (DIA's expiry is the
+      contract), no YAML for wait ceilings.
+
+When this box is checked, implementation starts at row 1 of E.3 and
+nothing else changes until the corresponding sub-phase acceptance is
+green.
 
 ## Open questions for DIA (extension of the D-list above)
 

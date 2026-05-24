@@ -8,6 +8,7 @@
 
 import type { CardanoDestinationConfig } from "../config/types.js";
 import type { EnrichedIntent } from "../source/types.js";
+import type { FeederErrorCode } from "../errors/codes.js";
 
 // ---------------------------------------------------------------------------
 // Submit request
@@ -35,12 +36,21 @@ export type SubmitResultOk = {
   ok: true;
   cardanoTxHash: string;
   intentHash: string;
+  /** Receiver NFT unit (`policyId + assetName`) — exclusive-lock key in
+   *  the inflight table and lane identifier for the coalescer. */
+  receiverUnit: string;
+  /** Pair NFT unit (`policyId + assetName`) updated by this tx. */
+  pairUnit: string;
 };
 
 export type SubmitResultErr = {
   ok: false;
   intentHash: string;
   error: Error;
+  /** Structured category of the failure — used for logging and metrics. */
+  code: FeederErrorCode;
+  /** Human-readable fix hint surfaced in terminal output. */
+  remediation: string;
 };
 
 export type SubmitResult = SubmitResultOk | SubmitResultErr;

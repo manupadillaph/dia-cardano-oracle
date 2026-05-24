@@ -13,7 +13,7 @@
 //      together with their dispatch verdict.
 //
 // The router does NOT submit anything. It only decides what to submit.
-// The submitter (Phase 3.4) calls the router and acts on the results.
+// The caller is responsible for submitting the dispatched intents.
 //
 // Condition operators match Spectra's Go implementation:
 //   in, not_in, eq, neq, gt, lt, gte, lte, contains.

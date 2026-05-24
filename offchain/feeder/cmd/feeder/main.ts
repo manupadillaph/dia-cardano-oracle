@@ -50,6 +50,11 @@ Flags:
   --transport <kind>    Applies to --scan. http (default) or ws.
   --dry-run             Print enriched intents but never submit a
                         Cardano tx. Also reachable via DRY_RUN=true.
+  --clean               Delete feeder-generated state before starting:
+                          logs/, feeder-checkpoint.json, feeder.sqlite*,
+                          clients/*/pairs/*.json
+                        CLI bootstrap artifacts are never touched:
+                          config-bootstrap.json, clients/*.json
   --help, -h            Show this help message and exit.
 
 The active network (Preview <-> DIA Testnet, Mainnet <-> DIA Mainnet)
@@ -128,6 +133,7 @@ async function dispatch(args: ParsedArgs): Promise<number> {
         configPath: args.configPath,
         transport: args.transport,
         dryRun: args.dryRun,
+        cleanState: args.cleanState,
         logLevel: args.logLevel,
         report,
         signal: shutdown.signal,

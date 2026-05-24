@@ -16,3 +16,9 @@ export {
   type SettleContext,
   type SettleResult,
 } from "./transactions/build-settle.js";
+
+export {
+  reconcilePairState,
+  type PairReconcileEntry,
+  type ReconcilePairStateResult,
+} from "./reconcile/pair-state.js";

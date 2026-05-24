@@ -30,15 +30,38 @@ export type OracleIntentSubmitParams = {
   enriched: EnrichedIntent;
   /** EVM intent hash (`0x…`). */
   intentHash: string;
+  /**
+   * Called once for each pipeline step inside `submitOracleUpdate`.
+   * Used by the write client to write intermediate entries to the
+   * per-intent log file without coupling the bridge to the file logger.
+   * Steps emitted (in order):
+   *   connecting, building, signing, submitting,
+   *   submitted (carries txHash), waiting_confirm,
+   *   waiting_utxo, writing_state
+   */
+  onStep?: (step: string, meta?: { txHash?: string }) => void;
+};
+
+/** Structured result returned by a successful oracle-update submission. */
+export type OracleUpdateResult = {
+  /** Cardano transaction hash of the confirmed tx. */
+  txHash: string;
+  /** Receiver NFT unit (`policyId + assetName`) touched by this tx.
+   *  Used as the exclusive-lock key in the inflight table. */
+  receiverUnit: string;
+  /** Pair NFT unit (`policyId + assetName`) updated by this tx. */
+  pairUnit: string;
+  /** True if this tx minted the pair NFT (first update for this symbol). */
+  isCreate: boolean;
 };
 
 /**
  * Single method the write client calls. Implementors handle the full
  * Lucid lifecycle: load state, build tx, sign, submit, confirm.
- * Returns the Cardano tx hash on success; throws on failure.
+ * Returns `OracleUpdateResult` on success; throws on failure.
  */
 export type OracleIntentBridge = {
-  submitOracleUpdate(params: OracleIntentSubmitParams): Promise<string>;
+  submitOracleUpdate(params: OracleIntentSubmitParams): Promise<OracleUpdateResult>;
 };
 
 // ---------------------------------------------------------------------------
@@ -91,8 +114,8 @@ export function createRealOracleIntentBridge(
   }
 
   return {
-    async submitOracleUpdate(params: OracleIntentSubmitParams): Promise<string> {
-      const { clientStatePath, protocolStatePath, enriched, intentHash } = params;
+    async submitOracleUpdate(params: OracleIntentSubmitParams): Promise<OracleUpdateResult> {
+      const { clientStatePath, protocolStatePath, enriched, intentHash, onStep } = params;
       const { fullIntent } = enriched;
 
       log(`submitOracleUpdate: intentHash=${intentHash} symbol=${fullIntent.symbol}`);
@@ -130,7 +153,7 @@ export function createRealOracleIntentBridge(
           assertDiaOracleIntentNotExpired,
         },
         { getNetworkNow },
-        { findSingleUtxoAtUnit, waitForWalletSettlement, waitForUnitUtxoReplacement },
+        { findSingleUtxoAtUnit, waitForWalletSettlement, waitForUnitUtxoReplacement, decodePairDatum },
         { awaitTxConfirmation },
         { buildOracleUpdateTx },
         { readOptionalPairState, appendTransactionRecord },
@@ -218,6 +241,7 @@ export function createRealOracleIntentBridge(
       // ------------------------------------------------------------------
       // 3. Connect Lucid + resolve current UTxOs.
       // ------------------------------------------------------------------
+      onStep?.("connecting");
       log(`connecting to Cardano…`);
       const cliConfig = getCliConfig();
       const lucid = await makeConfiguredLucidWithConfig(cliConfig);
@@ -232,20 +256,7 @@ export function createRealOracleIntentBridge(
       const networkNow = await getNetworkNow(lucid);
       assertDiaOracleIntentNotExpired(intent, networkNow.unixTimeSec);
 
-      const pairStatePath = pairStatePathForSymbol(clientStatePath, fullIntent.symbol, pairSlugFromSymbol);
-      const existingPair = await readOptionalPairState(pairStatePath);
-      const isCreate = !existingPair;
-      if (isCreate) {
-        assertPaymentKeyHashIsConfigSigner(
-          walletDefaults.paymentKeyHash,
-          protocol.configState.validConfigSigners,
-          {
-            unauthorizedMessage:
-              "Bridge: pair creation requires the configured wallet to be a config admin.",
-          },
-        );
-      }
-
+      // Compute pair unit first — needed for the on-chain isCreate check.
       if (!client.compiledScripts.pairMintPolicy) {
         throw new Error("Bridge: pairMintPolicy compiled script not found. Run receiver:parameterize first.");
       }
@@ -260,6 +271,54 @@ export function createRealOracleIntentBridge(
       const pairValidatorHash = scriptHashFromValidator(pairValidator);
       const pairValidatorAddress = scriptAddressFromValidator(pairValidator);
       const pairId = diaPairIdHex(intent);
+
+      // ------------------------------------------------------------------
+      // isCreate decided from chain — not from local file.
+      // utxosAtWithUnit returns [] when the pair NFT has never been minted
+      // or was burned; a non-empty result means a live pair UTxO exists.
+      // ------------------------------------------------------------------
+      const chainPairUtxos = await lucid.utxosAtWithUnit(pairValidatorAddress, pairUnit);
+      const isCreate = chainPairUtxos.length === 0;
+      const currentPairUtxo = chainPairUtxos[0] ?? null;
+
+      if (isCreate) {
+        assertPaymentKeyHashIsConfigSigner(
+          walletDefaults.paymentKeyHash,
+          protocol.configState.validConfigSigners,
+          {
+            unauthorizedMessage:
+              "Bridge: pair creation requires the configured wallet to be a config admin.",
+          },
+        );
+      }
+
+      // Read local pair state. If the pair is on-chain but the local file is
+      // absent (startup reconcile failed or file was deleted mid-run),
+      // reconstruct a minimal state from the on-chain datum so the monotonic-
+      // nonce check and buildState have the correct baseline.
+      const pairStatePath = pairStatePathForSymbol(clientStatePath, fullIntent.symbol, pairSlugFromSymbol);
+      let existingPair = await readOptionalPairState(pairStatePath);
+      if (!isCreate && !existingPair && currentPairUtxo?.datum) {
+        const onChain = decodePairDatum(currentPairUtxo.datum);
+        log(
+          `submitOracleUpdate: local pair state missing for symbol=${fullIntent.symbol}; ` +
+          `reconstructed from chain nonce=${onChain.nonce}`,
+        );
+        existingPair = {
+          wallet: { source: "seed", address: walletAddress },
+          pair: { tokenName: pairTokenName, pairId, pairUnit, pairValidatorAddress },
+          pairState: {
+            ...onChain,
+            intent: {
+              intentType: "", version: "0", chainId: "0", nonce: "0", expiry: "0",
+              symbol: fullIntent.symbol, price: onChain.price,
+              timestamp: onChain.timestamp, source: "", signature: "", signer: onChain.signer,
+            },
+          },
+          datum: { pairCbor: currentPairUtxo.datum },
+        };
+      }
+
       const minUtxoLovelace = existingPair?.pairState.minUtxoLovelace ?? protocol.configState.minUtxoLovelace;
 
       const rawState = buildState({
@@ -308,14 +367,7 @@ export function createRealOracleIntentBridge(
         state.scripts.configUnit,
         "config",
       );
-      const currentPairUtxo = isCreate
-        ? null
-        : await findSingleUtxoAtUnit(
-            lucid,
-            state.pair.pairValidatorAddress,
-            state.pair.pairUnit,
-            "pair",
-          );
+      // currentPairUtxo already fetched above via utxosAtWithUnit (isCreate check).
       const currentReceiverUtxo = await findSingleUtxoAtUnit(
         lucid,
         state.receiver.receiverValidatorAddress,
@@ -326,6 +378,7 @@ export function createRealOracleIntentBridge(
       // ------------------------------------------------------------------
       // 4. Build, sign, submit.
       // ------------------------------------------------------------------
+      onStep?.("building");
       log(`building oracle update tx for symbol=${fullIntent.symbol}`);
       const { txSignBuilder, nextPairState, nextPairDatumCbor } = await buildOracleUpdateTx(lucid, {
         isCreate,
@@ -345,13 +398,17 @@ export function createRealOracleIntentBridge(
         receiver: state.receiver,
       });
 
+      onStep?.("signing");
       const signedTx = await txSignBuilder.sign.withWallet().complete();
+      onStep?.("submitting");
       const txHash = await signedTx.submit();
+      onStep?.("submitted", { txHash });
       log(`submitted: txHash=${txHash} intentHash=${intentHash}`);
 
       // ------------------------------------------------------------------
       // 5. Await confirmation.
       // ------------------------------------------------------------------
+      onStep?.("waiting_confirm");
       const confirmed = await awaitTxConfirmation({
         lucid,
         txHash,
@@ -366,6 +423,7 @@ export function createRealOracleIntentBridge(
         );
       }
 
+      onStep?.("waiting_utxo");
       await waitForWalletSettlement({
         wallet,
         previousUtxos: walletUtxos,
@@ -389,6 +447,7 @@ export function createRealOracleIntentBridge(
           previousOutRef: currentReceiverUtxo,
         }),
       ]);
+      onStep?.("writing_state");
       await writePairState(pairStatePath, {
         wallet: { source: walletSource, address: walletAddress },
         pair: { ...state.pair },
@@ -401,8 +460,13 @@ export function createRealOracleIntentBridge(
         }),
       });
 
-      log(`confirmed: txHash=${txHash}`);
-      return txHash;
+      log(`confirmed: txHash=${txHash} receiverUnit=${state.receiver.receiverUnit as string}`);
+      return {
+        txHash,
+        receiverUnit: state.receiver.receiverUnit as string,
+        pairUnit,
+        isCreate,
+      };
     },
   };
 }

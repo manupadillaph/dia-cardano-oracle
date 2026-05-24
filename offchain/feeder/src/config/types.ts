@@ -122,6 +122,12 @@ export type EventProcessorConfig = {
   parallel_worker_count?: number;
   parallel_queue_size?: number;
   parallel_timeout?: string;
+  /** Accumulation window on the idle→accumulating lane edge.
+   *  Accepts duration strings ("2s", "500ms"). Default: "2s". */
+  coalesce_window?: string;
+  /** Drop buffered intents older than this at flush time.
+   *  Accepts duration strings ("60s", "5m"). Default: no limit. */
+  max_intent_age?: string;
 };
 
 export type WorkerPoolConfig = {
@@ -349,5 +355,7 @@ export type CardanoDestinationConfig = {
   network: "Preview" | "Mainnet";
   client_state_path: string;
   protocol_state_path: string;
-  tx_mode: "single" | "batch";
+  /** single: one tx per intent. batch: always batch. auto: batch when N>1,
+   *  single when N=1. Default: auto. */
+  tx_mode: "single" | "batch" | "auto";
 };

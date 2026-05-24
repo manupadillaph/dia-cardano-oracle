@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "feeder:dev": "tsx cmd/feeder/main.ts",
+    "scan:pairs": "tsx scripts/scan-dia-intents.ts",
     "test": "node --import tsx/esm --test $(find src cmd -path '*/__tests__/*.test.ts' | tr '\\n' ' ')"
   },
   "dependencies": {

@@ -1,10 +1,12 @@
+use aiken/builtin
 use aiken/collection/dict
 use aiken/collection/list
+use aiken/fuzz
 use aiken/interval
 use aiken/primitive/bytearray
 use cardano/address.{Credential, Script}
 use cardano/assets.{AssetName, PolicyId, Value}
-use cardano/transaction.{InlineDatum, Input, Output, Transaction}
+use cardano/transaction.{InlineDatum, Input, Output, OutputReference, Transaction}
 use dia_cardano_oracle/config_logic
 use dia_cardano_oracle/coordinator_logic.{
   ApplyBatch, ApplySettle, ApplySingle, CoordinatorRedeemer, SettleManifest,
@@ -975,4 +977,398 @@ test walk_batch_witnesses_aligned_order_passes_token_check() {
     first_name == w_a.pair_token_name,
     second_name == w_b.pair_token_name,
   }
+}
+
+type BatchUpdateBenchCase {
+  BatchUpdateBenchCase {
+    config_datum: config_logic.ConfigDatum,
+    tx: Transaction,
+    witnesses: List<oracle_logic.UpdateWitness>,
+  }
+}
+
+type SettleBuildState {
+  SettleBuildState {
+    receivers: List<SettleReceiver>,
+    inputs: List<Input>,
+    outputs: List<Output>,
+    delta: Int,
+  }
+}
+
+type ValidSettleBenchCase {
+  ValidSettleBenchCase {
+    config_datum: config_logic.ConfigDatum,
+    tx: Transaction,
+    manifest: SettleManifest,
+  }
+}
+
+const bench_pair_policy: PolicyId =
+  #"11111111111111111111111111111111111111111111111111111111"
+
+const bench_receiver_policy: PolicyId =
+  #"22222222222222222222222222222222222222222222222222222222"
+
+const bench_receiver_asset: AssetName =
+  #"4449415f5245434549564552"
+
+const bench_hook_policy: PolicyId =
+  #"dddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+const bench_hook_asset: AssetName = #"484f4f4b"
+
+const bench_signer_public_key: ByteArray =
+  #"03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807"
+
+const bench_signature: ByteArray =
+  #"7e3ab9c6c59f1997f007063e96120ab198bb4129875e49b4f48298c533771d0e6266a261ea108343a4ed02a6823ab3602bcdedd4b891226c2f452b4a158ac1011b"
+
+fn batch_bench_count(size: Int) -> Int {
+  size + 1
+}
+
+fn batch_bench_symbol(ix: Int) -> ByteArray {
+  builtin.cons_bytearray(ix, "PAIR")
+}
+
+fn batch_bench_intent(ix: Int) -> oracle_logic.OracleIntent {
+  let symbol = batch_bench_symbol(ix)
+  oracle_logic.OracleIntent {
+    intent_type: #"4f7261636c65557064617465",
+    version: #"312e30",
+    chain_id: 100640,
+    nonce: 1760960522308165264 + ix,
+    expiry: 9_999_999_999,
+    symbol,
+    price: 99992561 + ix,
+    timestamp: 1760960522 + ix,
+    source: #"444941204f7261636c65",
+    // Re-used real fixture signature. It is intentionally invalid once the
+    // intent fields vary, which is acceptable here because we want a stable
+    // cost baseline for the create-path walk without needing N distinct live
+    // DIA signatures in source.
+    signature: bench_signature,
+    signer: #"f64d333c19b007519c7b9316680ed26578f98c08",
+  }
+}
+
+fn batch_bench_witness(ix: Int) -> oracle_logic.UpdateWitness {
+  let intent = batch_bench_intent(ix)
+  oracle_logic.UpdateWitness {
+    receiver_policy_id: bench_receiver_policy,
+    receiver_asset_name: bench_receiver_asset,
+    pair_policy_id: bench_pair_policy,
+    pair_token_name: oracle_logic.pair_asset_name(intent.symbol),
+    intent,
+    signer_public_key: bench_signer_public_key,
+  }
+}
+
+fn batch_bench_pair_datum(ix: Int) -> oracle_logic.PairDatum {
+  let intent = batch_bench_intent(ix)
+  oracle_logic.PairDatum {
+    pair_id: intent.symbol,
+    price: intent.price,
+    timestamp: intent.timestamp,
+    nonce: intent.nonce,
+    intent_hash: oracle_logic.oracle_intent_hash(
+      sample_walk_config_datum().domain_data,
+      intent,
+    ),
+    signer: intent.signer,
+    min_utxo_lovelace: 2_000_000,
+  }
+}
+
+fn batch_bench_pair_output(ix: Int) -> Output {
+  let datum = batch_bench_pair_datum(ix)
+  let token_name = oracle_logic.pair_asset_name(datum.pair_id)
+  Output {
+    address: address.from_script(bench_pair_policy),
+    value:
+      assets.add(
+        assets.from_lovelace(datum.min_utxo_lovelace),
+        bench_pair_policy,
+        token_name,
+        1,
+      ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+}
+
+fn batch_bench_witnesses(count: Int) -> List<oracle_logic.UpdateWitness> {
+  batch_bench_witnesses_go(count, [])
+}
+
+fn batch_bench_witnesses_go(
+  remaining: Int,
+  acc: List<oracle_logic.UpdateWitness>,
+) -> List<oracle_logic.UpdateWitness> {
+  if remaining <= 0 {
+    acc
+  } else {
+    batch_bench_witnesses_go(
+      remaining - 1,
+      [batch_bench_witness(remaining), ..acc],
+    )
+  }
+}
+
+fn batch_bench_outputs(count: Int) -> List<Output> {
+  batch_bench_outputs_go(count, [])
+}
+
+fn batch_bench_outputs_go(remaining: Int, acc: List<Output>) -> List<Output> {
+  if remaining <= 0 {
+    acc
+  } else {
+    batch_bench_outputs_go(
+      remaining - 1,
+      [batch_bench_pair_output(remaining), ..acc],
+    )
+  }
+}
+
+fn batch_bench_mint(
+  witnesses: List<oracle_logic.UpdateWitness>,
+) -> Value {
+  list.foldl(
+    witnesses,
+    assets.from_lovelace(0),
+    fn(witness, acc) {
+      assets.add(
+        acc,
+        witness.pair_policy_id,
+        witness.pair_token_name,
+        1,
+      )
+    },
+  )
+}
+
+fn valid_batch_update_bench_case(count: Int) -> BatchUpdateBenchCase {
+  let witnesses = batch_bench_witnesses(count)
+  BatchUpdateBenchCase {
+    config_datum: sample_walk_config_datum(),
+    tx: Transaction {
+      ..transaction.placeholder,
+      outputs: batch_bench_outputs(count),
+      mint: batch_bench_mint(witnesses),
+      validity_range: interval.between(1760960522 * 1000, 9_999_999_998 * 1000),
+    },
+    witnesses,
+  }
+}
+
+fn bench_settle_receiver_policy(ix: Int) -> PolicyId {
+  builtin.cons_bytearray(ix, #"222222222222222222222222222222222222222222222222222222")
+}
+
+fn bench_settle_receiver_asset(ix: Int) -> AssetName {
+  builtin.cons_bytearray(ix, #"4449415f5245434549564552")
+}
+
+fn bench_receiver_datum(ix: Int) -> receiver_logic.ReceiverDatum {
+  receiver_logic.ReceiverDatum {
+    balance_lovelace: 10_000_000 + ix,
+    accrued_to_hook_lovelace: 1_000_000 + ix,
+    min_utxo_lovelace: 2_000_000,
+  }
+}
+
+fn bench_receiver_input(ix: Int) -> Input {
+  let policy_id = bench_settle_receiver_policy(ix)
+  let asset_name = bench_settle_receiver_asset(ix)
+  let datum = bench_receiver_datum(ix)
+  Input {
+    output_reference: OutputReference {
+      transaction_id: builtin.cons_bytearray(
+        ix,
+        #"01010101010101010101010101010101010101010101010101010101010101",
+      ),
+      output_index: 0,
+    },
+    output: Output {
+      address: address.from_script(policy_id),
+      value:
+        assets.add(
+          assets.from_lovelace(
+            datum.min_utxo_lovelace + datum.balance_lovelace + datum.accrued_to_hook_lovelace,
+          ),
+          policy_id,
+          asset_name,
+          1,
+        ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+}
+
+fn bench_receiver_output(ix: Int) -> Output {
+  let policy_id = bench_settle_receiver_policy(ix)
+  let asset_name = bench_settle_receiver_asset(ix)
+  let previous = bench_receiver_datum(ix)
+  let next =
+    receiver_logic.ReceiverDatum {
+      balance_lovelace: previous.balance_lovelace,
+      accrued_to_hook_lovelace: 0,
+      min_utxo_lovelace: previous.min_utxo_lovelace,
+    }
+  Output {
+    address: address.from_script(policy_id),
+    value:
+      assets.add(
+        assets.from_lovelace(
+          next.min_utxo_lovelace + next.balance_lovelace + next.accrued_to_hook_lovelace,
+        ),
+        policy_id,
+        asset_name,
+        1,
+      ),
+    datum: InlineDatum(next),
+    reference_script: None,
+  }
+}
+
+fn settle_build_state(count: Int) -> SettleBuildState {
+  settle_build_state_go(count, SettleBuildState { receivers: [], inputs: [], outputs: [], delta: 0 })
+}
+
+fn settle_build_state_go(
+  remaining: Int,
+  state: SettleBuildState,
+) -> SettleBuildState {
+  if remaining <= 0 {
+    state
+  } else {
+    let receiver =
+      SettleReceiver {
+        receiver_policy_id: bench_settle_receiver_policy(remaining),
+        receiver_asset_name: bench_settle_receiver_asset(remaining),
+      }
+    let previous = bench_receiver_datum(remaining)
+    settle_build_state_go(
+      remaining - 1,
+      SettleBuildState {
+        receivers: [receiver, ..state.receivers],
+        inputs: [bench_receiver_input(remaining), ..state.inputs],
+        outputs: [bench_receiver_output(remaining), ..state.outputs],
+        delta: state.delta + previous.accrued_to_hook_lovelace,
+      },
+    )
+  }
+}
+
+fn valid_settle_bench_config() -> config_logic.ConfigDatum {
+  config_logic.ConfigDatum {
+    ..sample_walk_config_datum(),
+    payment_hook_ref: Some(
+      config_logic.PaymentHookRef {
+        policy_id: bench_hook_policy,
+        asset_name: bench_hook_asset,
+      },
+    ),
+  }
+}
+
+fn valid_settle_hook_input() -> Input {
+  let datum =
+    payment_hook_logic.PaymentHookDatum {
+      ..payment_hook_logic.sample_payment_hook(),
+      accrued_fees_lovelace: 500_000,
+      lifetime_collected_lovelace: 10_000_000,
+    }
+  Input {
+    output_reference: OutputReference {
+      transaction_id: #"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      output_index: 0,
+    },
+    output: Output {
+      address: address.from_script(bench_hook_policy),
+      value:
+        assets.add(
+          assets.from_lovelace(
+            datum.min_utxo_lovelace + datum.accrued_fees_lovelace,
+          ),
+          bench_hook_policy,
+          bench_hook_asset,
+          1,
+        ),
+      datum: InlineDatum(datum),
+      reference_script: None,
+    },
+  }
+}
+
+fn valid_settle_hook_output(delta: Int) -> Output {
+  let previous =
+    payment_hook_logic.PaymentHookDatum {
+      ..payment_hook_logic.sample_payment_hook(),
+      accrued_fees_lovelace: 500_000,
+      lifetime_collected_lovelace: 10_000_000,
+    }
+  let next =
+    payment_hook_logic.PaymentHookDatum {
+      ..previous,
+      accrued_fees_lovelace: previous.accrued_fees_lovelace + delta,
+      lifetime_collected_lovelace: previous.lifetime_collected_lovelace + delta,
+    }
+  Output {
+    address: address.from_script(bench_hook_policy),
+    value:
+      assets.add(
+        assets.from_lovelace(
+          next.min_utxo_lovelace + next.accrued_fees_lovelace,
+        ),
+        bench_hook_policy,
+        bench_hook_asset,
+        1,
+      ),
+    datum: InlineDatum(next),
+    reference_script: None,
+  }
+}
+
+fn valid_settle_bench_case(count: Int) -> ValidSettleBenchCase {
+  let built = settle_build_state(count)
+  ValidSettleBenchCase {
+    config_datum: valid_settle_bench_config(),
+    tx: Transaction {
+      ..transaction.placeholder,
+      inputs: [valid_settle_hook_input(), ..built.inputs],
+      outputs: [valid_settle_hook_output(built.delta), ..built.outputs],
+    },
+    manifest: SettleManifest { receivers: built.receivers },
+  }
+}
+
+fn sample_valid_batch_update_case(size: Int) -> Fuzzer<BatchUpdateBenchCase> {
+  fuzz.constant(valid_batch_update_bench_case(batch_bench_count(size)))
+}
+
+fn sample_valid_settle_case(size: Int) -> Fuzzer<ValidSettleBenchCase> {
+  fuzz.constant(valid_settle_bench_case(batch_bench_count(size)))
+}
+
+bench update_coordinator_valid_batch_update_create_path(
+  bench_case via sample_valid_batch_update_case,
+) {
+  valid_batch_update(
+    bench_case.tx,
+    bench_case.config_datum,
+    bench_case.witnesses,
+  )
+}
+
+bench update_coordinator_valid_settle_receivers(
+  bench_case via sample_valid_settle_case,
+) {
+  valid_settle(
+    bench_case.tx,
+    bench_case.config_datum,
+    bench_case.manifest,
+  )
 }

@@ -79,4 +79,40 @@ La tercera oleada sería schema v2: redeemer de batch más compacto y hot datums
 
 Quedan algunas limitaciones y preguntas abiertas. No encontré, en el snapshot revisado, evidencia comprometida de un batch exitoso de 11 pares; sí encontré un runbook que automatiza 10→5 y evidencia mainnet de éxito para 10. Tampoco encontré un benchmark comprometido que compare de forma explícita “full decode versus fieldwise decode” para `receiver` y `payment_hook`; esa medición hay que construirla. Y el rediseño de batch firmado una vez por DIA, aunque es el más potente, depende de coordinación externa con el emisor de intents y por tanto no es un refactor autónomo del repositorio. fileciteturn16file0L1-L3 fileciteturn35file0L1-L3
 
+## Anexo — Línea base `aiken bench` (2026-05-23)
+
+Se añadieron benches Aiken para estos caminos:
+
+- `update_coordinator_valid_batch_update_create_path`
+- `update_coordinator_valid_settle_receivers`
+- `receiver_spend_accrue_fee_decodes_batch_redeemer`
+- `receiver_spend_settle_scans_manifest`
+- `payment_hook_spend_apply_settle_decodes_manifest`
+- `pair_state_spend_apply_update_fingerprint_stays_hot`
+
+La corrida de referencia usada para esta línea base fue:
+
+```sh
+cd contracts/aiken
+aiken bench --max-size 30 > /tmp/dia-aiken-bench-30.json
+```
+
+En estos samplers, el tamaño lógico modelado es `N = size + 1`. Por tanto:
+
+- `size = 0` corresponde a `N = 1`
+- `size = 30` corresponde a `N = 31`
+
+Resultados medidos en la corrida anterior:
+
+| Module | Bench | size=0 mem | size=0 cpu | size=30 mem | size=30 cpu |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `pair_state` | `pair_state_spend_apply_update_fingerprint_stays_hot` | 357,138 | 158,122,336 | 357,138 | 158,122,336 |
+| `payment_hook` | `payment_hook_spend_apply_settle_decodes_manifest` | 396,538 | 132,331,529 | 632,038 | 205,716,209 |
+| `receiver` | `receiver_spend_accrue_fee_decodes_batch_redeemer` | 447,256 | 145,509,149 | 1,308,856 | 412,082,789 |
+| `receiver` | `receiver_spend_settle_scans_manifest` | 432,137 | 140,934,918 | 812,447 | 258,882,408 |
+| `update_coordinator` | `update_coordinator_valid_batch_update_create_path` | 401,011 | 175,326,385 | 11,268,451 | 4,624,493,875 |
+| `update_coordinator` | `update_coordinator_valid_settle_receivers` | 452,228 | 146,535,001 | 30,244,463 | 9,297,575,191 |
+
+El JSON emitido por `aiken bench` para esta corrida contiene medidas intermedias para todos los tamaños `size = 0..30`.
+
 Mi veredicto final es favorable a ir “hasta el fondo”, pero en este orden: exprimir primero la decodificación y el schema actual; después adelgazar hot datums; y solo después, si todavía hace falta, negociar un batch intent firmado una sola vez. Con ese orden, lo más probable es que consigas bajar fees sin perder ni una coma de seguridad, y con una base medible para decidir si vale la pena pelear por batch-11, batch-12 o más.

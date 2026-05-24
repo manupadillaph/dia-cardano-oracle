@@ -1,6 +1,7 @@
 use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto.{ScriptHash}
+use aiken/fuzz
 use aiken/interval
 use cardano/address.{Credential, Script}
 use cardano/assets.{AssetName, PolicyId}
@@ -818,5 +819,59 @@ test burn_pair_spend_rejects_without_matching_burn() {
     BurnPair,
     own_ref,
     tx,
+  )
+}
+
+type PairApplyUpdateBenchCase {
+  PairApplyUpdateBenchCase {
+    own_ref: OutputReference,
+    tx: Transaction,
+  }
+}
+
+fn repeat_update_witnesses(count: Int) -> List<oracle_logic.UpdateWitness> {
+  if count <= 0 {
+    []
+  } else {
+    [test_witness(), ..repeat_update_witnesses(count - 1)]
+  }
+}
+
+fn pair_apply_update_bench_case(count: Int) -> PairApplyUpdateBenchCase {
+  let own_ref =
+    OutputReference {
+      transaction_id: #"0101010101010101010101010101010101010101010101010101010101010101",
+      output_index: 0,
+    }
+  let payload: Redeemer = ApplyBatch(repeat_update_witnesses(count))
+
+  PairApplyUpdateBenchCase {
+    own_ref,
+    tx: Transaction {
+      ..placeholder,
+      inputs: [test_pair_input(test_pair_token_name())],
+      reference_inputs: [test_config_ref_input()],
+      outputs: [test_pair_output()],
+      redeemers: [Pair(Withdraw(test_coord_credential), payload)],
+      validity_range: interval.between(0, test_intent().expiry * 1000 - 1),
+    },
+  }
+}
+
+fn sample_pair_apply_update_case(size: Int) -> Fuzzer<PairApplyUpdateBenchCase> {
+  fuzz.constant(pair_apply_update_bench_case(size + 1))
+}
+
+bench pair_state_spend_apply_update_fingerprint_stays_hot(
+  bench_case via sample_pair_apply_update_case,
+) {
+  pair_state.spend(
+    test_config_policy,
+    test_config_asset,
+    test_receiver_hash,
+    Some(test_pair_datum()),
+    ApplyUpdate,
+    bench_case.own_ref,
+    bench_case.tx,
   )
 }

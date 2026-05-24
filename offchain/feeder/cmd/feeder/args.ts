@@ -10,6 +10,7 @@
 //   --scan               mutually exclusive with --validate-only
 //   --transport <kind>   one of: http | ws (default: http, applies to --scan)
 //   --dry-run            also reachable via DRY_RUN=true (see .env.example)
+//   --clean              delete feeder-generated state before starting
 //   --help, -h
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
@@ -24,6 +25,7 @@ export type ParsedArgs = {
   mode: FeederMode;
   transport: Transport;
   dryRun: boolean;
+  cleanState: boolean;
   showHelp: boolean;
 };
 
@@ -36,6 +38,7 @@ const DEFAULTS: ParsedArgs = {
   mode: "daemon",
   transport: "http",
   dryRun: false,
+  cleanState: false,
   showHelp: false,
 };
 
@@ -63,6 +66,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
         break;
       case "--dry-run":
         parsed.dryRun = true;
+        break;
+      case "--clean":
+        parsed.cleanState = true;
         break;
       case "--config":
         parsed.configPath = requireValue(argv, ++i, "--config");

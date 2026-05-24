@@ -59,7 +59,13 @@ function makeOkClient(txHash = "cardano-tx-abc"): CardanoWriteClient {
   return {
     label: "test-client",
     async submit(req) {
-      return { ok: true, cardanoTxHash: txHash, intentHash: req.intentHash };
+      return {
+        ok: true,
+        cardanoTxHash: txHash,
+        intentHash: req.intentHash,
+        receiverUnit: "receiver-unit-test",
+        pairUnit: "pair-unit-test",
+      };
     },
   };
 }
@@ -68,7 +74,13 @@ function makeFailClient(message = "submit failed"): CardanoWriteClient {
   return {
     label: "fail-client",
     async submit(req) {
-      return { ok: false, intentHash: req.intentHash, error: new Error(message) };
+      return {
+        ok: false,
+        intentHash: req.intentHash,
+        error: new Error(message),
+        code: "Unknown",
+        remediation: "",
+      };
     },
   };
 }
@@ -124,7 +136,7 @@ describe("createSubmissionQueue", () => {
       label: "ordered",
       async submit(req) {
         order.push(req.intentHash);
-        return { ok: true, cardanoTxHash: `tx-${req.intentHash}`, intentHash: req.intentHash };
+        return { ok: true, cardanoTxHash: `tx-${req.intentHash}`, intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" };
       },
     };
     const q = createSubmissionQueue({ client, inflight: createInflightTable() });
@@ -161,7 +173,7 @@ describe("createSubmissionQueue", () => {
       label: "slow",
       async submit(req) {
         await blocker;
-        return { ok: true, cardanoTxHash: "tx-slow", intentHash: req.intentHash };
+        return { ok: true, cardanoTxHash: "tx-slow", intentHash: req.intentHash, receiverUnit: "r", pairUnit: "p" };
       },
     };
     const q = createSubmissionQueue({ client, inflight: createInflightTable() });

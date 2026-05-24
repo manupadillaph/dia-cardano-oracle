@@ -1,12 +1,15 @@
 use aiken/collection/dict
 use aiken/collection/list
+use aiken/fuzz
 use cardano/address.{Credential, Script}
 use cardano/assets.{AssetName, PolicyId}
 use cardano/transaction.{
-  InlineDatum, Input, Output, OutputReference, Transaction,
+  InlineDatum, Input, Output, OutputReference, Redeemer, Transaction, Withdraw,
+  placeholder,
 }
 use dia_cardano_oracle/config_logic
 use dia_cardano_oracle/coordinator_logic.{
+  ApplySettle, CoordinatorRedeemer, SettleManifest, SettleReceiver,
   IntentForHookSettle, coordinator_intent_matches,
 }
 use dia_cardano_oracle/payment_hook_logic
@@ -253,5 +256,177 @@ fn has_expected_hook_ref(
       policy_id: hook_policy_id,
       asset_name: hook_asset_name,
     },
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Benchmarks
+//
+// `payment_hook.spend ApplySettle` is on a hot operational path and currently
+// decodes the full `ApplySettle(manifest)` redeemer even though it only needs
+// to know the coordinator is in settle mode. This bench gives us a baseline for
+// that growth before optimizing the binding.
+
+const bench_bootstrap_ref: OutputReference =
+  OutputReference {
+    transaction_id: #"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    output_index: 0,
+  }
+
+const bench_hook_ref: OutputReference =
+  OutputReference {
+    transaction_id: #"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    output_index: 0,
+  }
+
+const bench_config_ref: OutputReference =
+  OutputReference {
+    transaction_id: #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    output_index: 0,
+  }
+
+const bench_config_policy: PolicyId =
+  #"cf00cf00cf00cf00cf00cf00cf00cf00cf00cf00cf00cf00cf00cf00"
+
+const bench_config_asset: AssetName =
+  #"4449415f434f4e464947"
+
+const bench_hook_policy: PolicyId =
+  #"dddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+
+const bench_hook_asset: AssetName =
+  #"484f4f4b"
+
+const bench_coord_credential: Credential =
+  Script(#"abababababababababababababababababababababababababababab")
+
+const bench_admin_vkh: ByteArray =
+  #"11111111111111111111111111111111111111111111111111111111"
+
+type PaymentHookBenchCase {
+  PaymentHookBenchCase {
+    own_ref: OutputReference,
+    current_datum: payment_hook_logic.PaymentHookDatum,
+    tx: Transaction,
+  }
+}
+
+fn bench_config_datum() -> config_logic.ConfigDatum {
+  config_logic.ConfigDatum {
+    ..config_logic.sample_config(),
+    config_admins: [bench_admin_vkh],
+    payment_hook_ref: Some(
+      config_logic.PaymentHookRef {
+        policy_id: bench_hook_policy,
+        asset_name: bench_hook_asset,
+      },
+    ),
+    update_coordinator_credential: Some(bench_coord_credential),
+  }
+}
+
+fn bench_hook_output(datum: payment_hook_logic.PaymentHookDatum) -> Output {
+  Output {
+    address: address.from_script(bench_hook_policy),
+    value:
+      assets.add(
+        assets.from_lovelace(
+          datum.min_utxo_lovelace + datum.accrued_fees_lovelace,
+        ),
+        bench_hook_policy,
+        bench_hook_asset,
+        1,
+      ),
+    datum: InlineDatum(datum),
+    reference_script: None,
+  }
+}
+
+fn bench_hook_input(
+  own_ref: OutputReference,
+  datum: payment_hook_logic.PaymentHookDatum,
+) -> Input {
+  Input { output_reference: own_ref, output: bench_hook_output(datum) }
+}
+
+fn bench_config_input() -> Input {
+  Input {
+    output_reference: bench_config_ref,
+    output: Output {
+      address: address.from_script(
+        #"ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      ),
+      value: assets.from_asset(bench_config_policy, bench_config_asset, 1),
+      datum: InlineDatum(bench_config_datum()),
+      reference_script: None,
+    },
+  }
+}
+
+fn bench_manifest_receivers(count: Int) -> List<SettleReceiver> {
+  if count <= 0 {
+    []
+  } else {
+    let tail = bench_manifest_receivers(count - 1)
+    [
+      SettleReceiver {
+        receiver_policy_id: #"99999999999999999999999999999999999999999999999999999999",
+        receiver_asset_name: #"4449415f52454345495645525f4d414e4946455354",
+      },
+      ..tail
+    ]
+  }
+}
+
+fn payment_hook_bench_case(count: Int) -> PaymentHookBenchCase {
+  let current =
+    payment_hook_logic.PaymentHookDatum {
+      ..payment_hook_logic.sample_payment_hook(),
+      accrued_fees_lovelace: 1_000_000,
+      lifetime_collected_lovelace: 5_000_000,
+    }
+  let next =
+    payment_hook_logic.PaymentHookDatum {
+      ..current,
+      accrued_fees_lovelace: 4_000_000,
+      lifetime_collected_lovelace: 8_000_000,
+    }
+  let coord_redeemer: CoordinatorRedeemer =
+    ApplySettle(
+      SettleManifest { receivers: bench_manifest_receivers(count) },
+    )
+  let payload: Redeemer = coord_redeemer
+
+  PaymentHookBenchCase {
+    own_ref: bench_hook_ref,
+    current_datum: current,
+    tx: Transaction {
+      ..placeholder,
+      inputs: [bench_hook_input(bench_hook_ref, current)],
+      reference_inputs: [bench_config_input()],
+      outputs: [bench_hook_output(next)],
+      redeemers: [Pair(Withdraw(bench_coord_credential), payload)],
+      extra_signatories: [bench_admin_vkh],
+    },
+  }
+}
+
+fn sample_payment_hook_case(size: Int) -> Fuzzer<PaymentHookBenchCase> {
+  fuzz.constant(payment_hook_bench_case(size + 1))
+}
+
+bench payment_hook_spend_apply_settle_decodes_manifest(
+  bench_case via sample_payment_hook_case,
+) {
+  payment_hook.spend(
+    bench_bootstrap_ref,
+    bench_hook_asset,
+    bench_config_policy,
+    bench_config_asset,
+    bench_coord_credential,
+    Some(bench_case.current_datum),
+    payment_hook_logic.ApplySettle,
+    bench_case.own_ref,
+    bench_case.tx,
   )
 }

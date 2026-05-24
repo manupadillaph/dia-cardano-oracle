@@ -40,13 +40,12 @@ routers:
             - ETH/USD
             - USDC/USD
             - USDT/USD
+            - DOGE/USD
+            - LTC/USD
             - ARB/USD
-            - SOL/USD
-            - WETH/USD
-            - DAI/USD
-            - LINK/USD
-            - ADA/USD
-            - DEX:SERV/USD
+            - SHIB/USD
+            - NEIRO/USD
+            - XVG/USD
 
     processing:
       # datasource: "enrichment" — use the full OracleIntent from getIntent().
@@ -72,7 +71,7 @@ routers:
           tx_mode: single
         # time_threshold: minimum time between two updates for the same symbol
         #   on this destination. Prevents hammering the chain with every tick.
-        time_threshold: 1m
+        time_threshold: 5m
         # price_deviation: minimum relative price change to trigger an update.
         #   "0.1%" means skip the update if the new price is within ±0.1% of
         #   the last submitted price.

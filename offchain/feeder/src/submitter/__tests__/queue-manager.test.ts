@@ -62,7 +62,13 @@ function makeOkClient(label: string): CardanoWriteClient {
   return {
     label,
     async submit(req) {
-      return { ok: true, cardanoTxHash: `tx-${req.intentHash}`, intentHash: req.intentHash };
+      return {
+        ok: true,
+        cardanoTxHash: `tx-${req.intentHash}`,
+        intentHash: req.intentHash,
+        receiverUnit: "receiver-unit-test",
+        pairUnit: "pair-unit-test",
+      };
     },
   };
 }
@@ -133,7 +139,13 @@ describe("createQueueManager", () => {
       clientFactory: () => ({
         label: "err-client",
         async submit(req) {
-          return { ok: false, intentHash: req.intentHash, error: new Error("fail") };
+          return {
+            ok: false,
+            intentHash: req.intentHash,
+            error: new Error("fail"),
+            code: "Unknown" as const,
+            remediation: "",
+          };
         },
       }),
     });
