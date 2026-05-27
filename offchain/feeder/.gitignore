@@ -5,5 +5,9 @@ dist/
 !.env.example
 *.sqlite
 *.sqlite-journal
-# Runtime state owned by the feeder (checkpoints, future DB files).
-state/
+# Runtime state — generated while the feeder runs; not committed.
+# Bootstrap artifacts (state/*/config-bootstrap.json, state/*/clients/*.json)
+# are committed so a fresh clone is ready to run without a manual copy step.
+state/*/logs/
+state/*/feeder-checkpoint.json
+state/*/clients/*/pairs/

@@ -47,9 +47,16 @@ export async function reconcileAllDestinations(args: {
 }): Promise<ReconcileDestinationResult[]> {
   const { config, log } = args;
 
+  // Resolution priority (highest to lowest):
+  //   1. explicit args.cliSrcRoot (programmatic override, tests)
+  //   2. env CARDANO_FEEDER_CLI_DIST_ROOT
+  //      (set by Docker image to /app/cli/dist; documented in .env.example)
+  //   3. fallback: ../../../cli/src relative to this module (dev mode under tsx)
   const cliRoot = args.cliSrcRoot
     ? path.resolve(args.cliSrcRoot)
-    : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../cli/src");
+    : process.env.CARDANO_FEEDER_CLI_DIST_ROOT
+      ? path.resolve(process.env.CARDANO_FEEDER_CLI_DIST_ROOT)
+      : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../cli/src");
 
   // Collect unique (clientStatePath, protocolStatePath) pairs from all
   // enabled routers.

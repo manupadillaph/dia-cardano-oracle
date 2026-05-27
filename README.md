@@ -18,13 +18,16 @@ Project and delivery documents:
 Component docs:
 
 - [On-chain contracts (Aiken)](contracts/aiken/README.md)
-- [Off-chain CLI runbook](offchain/cli/README.md)
+- [Off-chain CLI runbook](offchain/cli/README.md) — protocol bootstrap, client onboarding, maintenance txs (settle, withdraw, pair lifecycle).
+- [Feeder daemon](offchain/feeder/README.md) — long-running service that consumes DIA Lasernet `OracleIntent` events and submits Cardano oracle updates (M2 deliverable).
 
 ## Repository Scope
 
-- `contracts/`: on-chain implementation
-- `offchain/`: off-chain components and operator tooling
-- `docs/`: architecture, milestones, requirements, plans, references
+- `contracts/`: on-chain Aiken implementation.
+- `offchain/cli/`: admin CLI — protocol/client bootstrap, treasury ops, lifecycle txs.
+- `offchain/feeder/`: long-running feeder daemon — DIA → Cardano pipeline, HTTP API, Prometheus metrics, cron-based liveness.
+- `offchain/Makefile`: operator shortcuts wrapping the unified `dia-cardano-feeder` Docker image (CLI + feeder in one image; profiles `sqlite`, `postgres`, `cli`, `monitoring`).
+- `docs/`: architecture, milestones, requirements, plans, references.
 
 ## Prerequisites
 
@@ -53,8 +56,10 @@ Step 1 can be skipped if you have not modified the contracts; the committed
 
 ## Operator Workflow
 
-The end-to-end Preview runbook lives in
-[`offchain/cli/README.md`](offchain/cli/README.md). At a glance, the phases are:
+Two complementary surfaces:
+
+**CLI (admin, one-shot ops)** — full Preview runbook in
+[`offchain/cli/README.md`](offchain/cli/README.md). Phases:
 
 1. Wallet setup.
 2. Protocol deployment (Config, PaymentHook, coordinator).
@@ -63,6 +68,28 @@ The end-to-end Preview runbook lives in
 5. Live updates (single and batch).
 6. Maintenance transactions (settle, withdraws, min-UTxO updates, pair burn,
    reference-script reclaim).
+
+**Feeder daemon (M2, long-running)** — full operator manual in
+[`offchain/feeder/README.md`](offchain/feeder/README.md). Pipeline:
+
+1. Subscribe to DIA Lasernet `OracleIntent` events (WebSocket or HTTP polling).
+2. Enrich, dedup, route by per-router policy (`time_threshold`, `price_deviation`).
+3. Coalesce into per-lane batches and submit Cardano oracle update txs.
+4. Cron-driven liveness — re-push the latest cached intent when a pair has
+   gone stale beyond `time_threshold` (Spectra parity).
+5. Expose `/health`, `/metrics`, `/api/v1/prices` over HTTP.
+6. Optional monitoring profile — Prometheus + Grafana with alert rules covering
+   pair staleness, balance thresholds, price anomalies, reorgs.
+
+The fastest path to a working deployment is the unified Docker image:
+
+```sh
+cd offchain
+make build               # builds the dia-cardano-feeder image (feeder + CLI)
+make up                  # starts the feeder daemon (sqlite profile)
+make up-monitoring       # adds Prometheus + Grafana
+make cli CMD="protocol"  # one-shot CLI command in the same image
+```
 
 For the protocol design behind each phase — datums, redeemers, cross-script
 invariants, fee flow, batch validation algorithm, trust model — see the

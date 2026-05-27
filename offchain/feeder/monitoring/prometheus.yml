@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: feeder
+    static_configs:
+      - targets: ["feeder-sqlite:8080"]
+    metrics_path: /metrics
+
+rule_files:
+  - alerts.yml

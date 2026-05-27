@@ -320,6 +320,11 @@ correctly-scoped paths (`routers.<id>.triggers.events`,
 - [x] `cmd/feeder/args.ts`: `--scan`, `--transport <http|ws>`, and
   `--dry-run` flags added; mutually exclusive with `--validate-only`.
   `DRY_RUN=true` env var is honoured for Spectra parity.
+- [x] `cmd/feeder/args.ts`: `--from-block <N>` and `--from-latest`
+  flags added (2026-05-24); mutually exclusive with each other.
+  `--from-block` validates a non-negative integer at parse time.
+  `--clean` flag added to wipe persisted state before startup.
+  Tests: `cmd/feeder/__tests__/args.test.ts` (all new flag suites).
 - [x] `cmd/feeder/scan-cmd.ts`: composes scanner + dedup + enricher
   end-to-end; wires the abort signal from `main.ts` for graceful
   shutdown; prints each enriched intent as a one-line summary + JSON
@@ -477,6 +482,30 @@ field map.
 
 **Acceptance**: verified — `feeder scan --dry-run` annotates each intent
 with `routed:` or `filtered:` reason via `routeIntent` in `daemon-cmd.ts`.
+
+**Price deviation behaviour confirmed against Spectra source
+(`services/bridge/pkg/router/generic_router.go`):**
+
+`price_deviation` is a **minimum update threshold** (not a maximum alert
+threshold). Spectra calculates `abs((newPrice - oldPrice) / oldPrice) * 100`
+and compares to the configured threshold per destination. Two outcomes:
+
+- **Change ≥ threshold** → the intent IS published to that destination.
+  This is the "divergent enough to be worth publishing" path.
+- **Change < threshold** → the destination is **filtered out**; the intent
+  is silently skipped for that destination. No alert is raised, no on-chain
+  update is submitted. A counter `intents_filtered_total{reason="price_deviation"}`
+  is incremented.
+
+**There is no "publish but alert" mode.** The price deviation gate is purely
+a submission filter. If you want alerting on large deviations (potential
+price manipulation, oracle issues), that must be a separate rule in the
+metrics/alerting layer (e.g. `dia_bridge_price_deviation_percent{symbol}` histogram
+with a Grafana alert on p99 > threshold).
+
+Our `src/router/policy.ts` already implements this behaviour: intents with
+insufficient price change are filtered at the router layer before they reach
+the Cardano submitter. We are **fully aligned with Spectra on this point**.
 
 #### Phase 3.4 — Cardano write client + queue — **done 2026-05-24**
 
@@ -768,6 +797,104 @@ batch paths.
 - **Coalesce window**: `coalesce_window` in `infrastructure.preview.yaml`
   drives the 2 s default; configurable via YAML.
 
+##### 3.4.5.h — Startup checkpoint seeding (--from-block / --from-latest) — **done 2026-05-24**
+
+When the feeder starts against a new network (no persisted checkpoint),
+the default behaviour is to scan from `source.start_block` in the YAML.
+Operators often want to skip history and start from the chain tip or a
+specific block — without editing YAML.
+
+- [x] `cmd/feeder/checkpoint-seed.ts`: `seedCheckpointIfNeeded` —
+  injectable helper (takes `checkpoint`, `fromBlock?`, `fromLatest`,
+  `getLatestBlock`, `report`). No side-effects when neither flag is set.
+  `fromLatest` saves the chain tip; `fromBlock N` saves `N-1` so the
+  scanner's first batch starts at exactly N. Clamps at 0.
+- [x] `cmd/feeder/args.ts`: `--from-block <N>` and `--from-latest`
+  flags added; mutual exclusion enforced at parse time.
+  `--clean` flag added to wipe persisted state before the seed write.
+- [x] Wired in `daemon-cmd.ts` (step after checkpoint open, before
+  scanner start) and `scan-cmd.ts` (same position).
+- [x] Tests: `cmd/feeder/__tests__/checkpoint-seed.test.ts` — 13 tests
+  covering no-op, `fromLatest`, `fromBlock`, clamp at 0, priority.
+- [x] `README.md`: "Starting from a specific block" section added with
+  three-tier priority doc (`--from-latest` / `--from-block` →
+  persisted checkpoint → YAML `start_block`) and copy-paste examples.
+
+**Acceptance**: `--from-latest` seeds the tip block and the scanner
+emits no intents older than that block; `--from-block 7200000` seeds
+`7199999` so the first log fetch starts at block `7200000`; `--clean
+--from-latest` wipes state then seeds tip in one invocation.
+
+##### 3.4.5.i — One Cardano tx per flush (M2-blocking)
+
+**Status: implemented in feeder + covered by tests (2026-05-26).**
+Each lane flush now produces one shared submission path:
+
+- `N = 1` → single-symbol submit path
+- `N >= 2` → batch submit path
+- mixed mint + update entries are decided per entry at flush time from the
+  chain state and can coexist in the same batch tx
+
+**Behavioural model (per-flush):**
+
+| Buffer at flush | Cardano tx path |
+| --- | --- |
+| 1 entry | `buildOracleUpdateTx` (the existing single-symbol path) |
+| ≥ 2 entries | `buildBatchOracleUpdateTx` (one tx with N pair updates) |
+| ≥ 2 entries, some pairs not yet minted on-chain | Same batch tx: each entry decides `mint` or `update` independently based on the chain-as-truth `isCreate` check. Mint and update entries coexist in the same tx. |
+
+There is **no `tx_mode` config knob**. The decision is intrinsic to the
+flush count — always one tx, batched when the buffer holds more than one
+entry. Mint vs update is per-entry, determined at flush time by
+`lucid.utxosAtWithUnit(pairUnit)` (the chain-as-truth check already in
+`lib-bridge/index.ts`).
+
+**Verification completed during implementation:**
+
+- [x] Confirm `buildBatchOracleUpdateTx`
+  (`offchain/cli/src/lib/transactions/build-batch-oracle-update.ts`)
+  supports mixed mint + update entries in one tx.
+
+**Tasks:**
+
+- [x] Batch submit path implemented in
+  `offchain/feeder/src/lib-bridge/index.ts` via
+  `submitOracleUpdateBatch(params[])`, wrapping `buildBatchOracleUpdateTx`.
+- [x] `coalescer.ts` flush path now routes `entries.length === 1` through the
+  single path and `entries.length >= 2` through the batch path.
+- [x] Per-entry `isCreate` is determined inside the bridge from
+  `lucid.utxosAtWithUnit(pairUnit)` at submit time.
+- [x] `max_batch_size` is read from YAML and large flushes are chunked into
+  successive submissions inside the same in-flight cycle.
+- [x] `size_fallback_enabled` is read from YAML and `BatchSizeExceeded`
+  triggers recursive split-and-retry.
+- [x] Per-entry `IntentAgedOut` handling exists at flush time, and lane events
+  are emitted for buffering, supersession, flush, reflush, and idle transitions.
+- [x] Tests cover N=1, N=2, mixed batch member actions, `max_batch_size`
+  chunking, and `BatchSizeExceeded` fallback.
+
+**Configuration (all from YAML, no hardcoding):**
+
+New fields under `event_processor` in `infrastructure.<network>.yaml`:
+
+- `max_batch_size: 10` — hard cap on entries per batch tx
+- `size_fallback_enabled: true` — halve-and-retry on `BatchSizeExceeded`
+
+Both fields documented with Zod validators in `src/config/types.ts` and
+in `offchain/feeder/README.md` under "Configuration → event_processor".
+
+**Why this matters**: with 10+ pairs and ~1 intent/symbol/minute, the
+serial single-symbol path submits 10 sequential Cardano txs per cycle
+(each 30–120 s). One batch tx collapses them into one — 10× lower fee
+spend, 10× lower confirmation wait, 10× fewer UTxO round-trips.
+
+**Acceptance**: a flush with N=1 submits exactly one tx via the single
+path; a flush with N=5 submits exactly one tx via the batch path; a flush
+with 3 existing pairs and 2 new pairs submits one tx with 3 update
+redeemers and 2 mint redeemers; a flush of 25 entries with
+`max_batch_size: 10` submits three successive txs (10, 10, 5);
+`BatchSizeExceeded` triggers the halve-and-retry ladder.
+
 ##### Phase 3.4.5 rolled-up acceptance
 
 Against Cardano Preview + DIA testnet, a 30-minute feeder run:
@@ -775,49 +902,1811 @@ Against Cardano Preview + DIA testnet, a 30-minute feeder run:
 - produces **0** false `submit failed` events from wait3 lag,
 - emits structured JSON-line logs, one per intent, every failure
   carrying a `FeederErrorCode` and a `remediation` string,
-- correctly halts the lane and surfaces the reason on `/healthz`
+- correctly halts the lane and surfaces the reason on `/health/ready`
   when the wallet or the receiver is drained,
 - on restart with a deliberately corrupted pair-state JSON, boots
-  green by reconciling from chain,
-- coalesces a burst of 5 same-client intents into one batch tx.
+  green by reconciling from chain.
 
 #### Phase 3.5 — Persistence + API + metrics
 
-- [ ] `src/persistence/db.ts`: pluggable adapter,
-  `DATABASE_DRIVER=sqlite|postgres`. SQLite is the default (single
-  file in `state/<network>/feeder.sqlite`); Postgres opt-in via DSN.
-- [ ] `src/persistence/schema.ts` + `migrations/`: tables `processed_events`,
-  `chain_state`, `transaction_log` (Cardano-adapted: txHash hex,
-  outRef columns for receiver/pair); migrations runnable on both
-  engines.
-- [ ] `src/api/server.ts`: HTTP server (default `:8080`).
-- [ ] `src/api/health.ts`: `/healthz` (liveness), `/readyz` (registry
-  reachable + last submission age within budget).
-- [ ] `src/api/metrics.ts`: `/metrics` (Prometheus, `prom-client`):
-  counters (events_scanned, events_dedup_hit, intents_routed,
-  intents_filtered, cardano_tx_submitted, cardano_tx_confirmed,
-  cardano_tx_failed) + histograms (intent-to-confirm latency).
-- [ ] `src/api/prices.ts`: `/prices` returning the `price-cache`
-  contents (per `(clientId, symbol)`: last price, timestamp,
-  intentHash, txHash) — same shape as Spectra's `/prices`.
+##### Configuration constraint (applies to ALL remaining M2 work)
 
-**Acceptance**: `curl :8080/healthz`, `/readyz`, `/metrics`, `/prices`
+**Nothing may be hardcoded.** Every tunable — defaults, thresholds,
+intervals, paths, confirmation depths, batch sizes, retry counts, timeouts,
+alert ceilings — must be read from YAML or environment variables. The code
+that consumes the value must include a docstring or comment pointing to
+*where* the value is configured (which YAML key, which env var) and *what
+valid values mean*. The `offchain/feeder/README.md` (and CLI README where
+applicable) must document every new config key.
+
+Existing hardcoded values flagged for promotion to YAML/env during M2:
+
+- `confirmations = 6n` in `scanner-http.ts` → YAML `block_scanner.confirmations`
+- 3-minute wait ceilings in `tx-confirmation.ts` → env vars (already partially
+  there: `TX_CONFIRMATION_*`) — verify completeness
+- Any new tunable introduced by 3.4.5.i, 3.5.x, 3.6, 3.8 → YAML or env from day one
+
+##### M2 implementation order
+
+Audit (2026-05-26) confirmed Persistence (3.5.1) is already complete and
+the API + Metrics layers exist but with gaps. The remaining M2 work is
+sequenced as follows. Each step builds on the previous; do not start
+step N+1 until step N is functionally complete and its tests pass.
+
+1. **3.5.1 — Persistence — DONE.** SQLite + Postgres drivers, all three
+   tables, repos, tests. See Step 1 verification checklist.
+2. **3.5.3 — Prometheus metrics** — core metric surface is implemented in
+   code and tests. Remaining work is operational: live receiver/coordinator
+   balance gauges, top-up warning emission, and monitoring profile wiring.
+   See Step 2.
+3. **3.5.2 — HTTP API endpoints** — implemented in code and tests. See Step 3.
+4. **3.6 — Monitoring profile — DONE (2026-05-26).** `monitoring/prometheus.yml`,
+   `monitoring/alerts.yml`, Grafana provisioning + dashboard JSON, docker-compose
+   `monitoring` profile with Prometheus + Grafana services.
+4.5. **3.6 — Docker: unified feeder + CLI image — DONE (2026-05-26).** Dockerfile
+   rewritten as 3-stage build (cli-build, feeder-build, runtime) with `dia-cli`
+   wrapper. Compose: context moved to `offchain/`, `cli` service added (profile
+   `cli`), `feeder-artifacts` volume, monitoring services. `offchain/Makefile`
+   created. `lib-bridge` env override `CARDANO_FEEDER_CLI_DIST_ROOT` added.
+   Latent `ERR_MODULE_NOT_FOUND` bug fixed. See Step 4.5.
+5. **3.4.5.i — One Cardano tx per flush** — DONE in feeder code and tests.
+6. **3.8 — Rollbacks & finality — DONE (2026-05-26).** Core code/config
+   implemented. README finality narrative added: what `confirmedAtDepth` means,
+   the Ouroboros Praos finality model, reorg handling, config key. API response
+   already carries `confirmedAtDepth`. Live verification deferred to Phase 4.
+7. **Phase 4 — Evidence run** — 30-min Preview ↔ DIA testnet run with
+   metrics + Grafana screenshots + tx hashes captured.
+
+Post-M2 (kept in plan so it is not forgotten):
+
+- **3.7 — Automatic settle tx** — design TBD; needs trigger policy and
+  authorization model resolved.
+- **3.9 — Batch settle CLI** — verified in contracts and still pending in
+  CLI/feeder. On-chain support exists via
+  `SettleManifest { receivers: List<SettleReceiver> }` and
+  `CoordinatorRedeemer.ApplySettle(SettleManifest)` in
+  `contracts/aiken/lib/dia_cardano_oracle/coordinator_logic.ak`, with the
+  corresponding settle paths enforced in the Receiver and PaymentHook
+  validators. CLI `settle.ts` currently handles one receiver only.
+  Pending: extend `buildSettleTx` and `settle.ts` to accept multiple
+  `(clientStatePath, receiverUtxo)` pairs, build one settle tx for all,
+  and update payment hook in a single on-chain step. Design TBD (together
+  with 3.7 signer model).
+
+##### Implementation contract for remaining M2 work
+
+This section is the executable spec. **An agent picking up M2 work should
+read this section first.** The per-phase sections (3.5.1, 3.5.2, 3.5.3,
+3.6, 3.4.5.i, 3.8) below are background and rationale; the concrete file
+paths, function signatures, YAML keys, and acceptance criteria live here.
+
+###### Global conventions
+
+- **Language / runtime**: TypeScript on Node 22 (LTS), ESM only.
+- **Module layout**: existing convention — `offchain/feeder/src/<area>/`
+  with `index.ts` re-exporting public surface. New areas in M2:
+  `src/persistence/`, `src/metrics/`, `src/api/`, `src/monitoring/`.
+- **Config loading**: every new tunable is added to the Zod schema in
+  `src/config/types.ts`, validated by `src/config/loader.ts`, and
+  consumed via the resolved config object — **never** read directly
+  from `process.env` outside the loader except for secrets and
+  per-deployment selectors. README and docstring must point to the
+  YAML key (and the env override, if any).
+- **Logging**: existing 4-stream pattern stays — `feeder.log`,
+  `lane.jsonl`, `transactions.jsonl`, `intents/*.log`. New events go to
+  the existing streams via `src/logger/file-logger.ts`.
+- **Testing**: `vitest`. Unit tests next to source as `__tests__/*.test.ts`.
+  DB tests use in-memory SQLite (`:memory:`). HTTP tests use `supertest`.
+- **Code style**: no comments unless the WHY is non-obvious; no
+  `Phase X.Y` refs in code (use NOTE/TODO for future work, PR description
+  for context); no "backward-compatible" language (say "existing callers
+  unaffected" or "new params are optional"); no hardcoded values.
+
+###### Runtime dependencies — already in `package.json`
+
+**No new deps needed for M2 work.** Audit (2026-05-26) confirmed:
+
+- `better-sqlite3` ^12.10.0 + `@types/better-sqlite3` ^7.6.13 — present (optional dep)
+- `prom-client` ^15.1.3 — present (optional dep)
+- `pg` ^8.21.0 + `@types/pg` ^8.20.0 — present (optional dep; post-M2)
+- HTTP server uses **Node's built-in `node:http`** — no express, no
+  framework. New routes are added by extending the `if (url === ...)`
+  chain in `src/api/server.ts`.
+- Testing uses the built-in `node:test` runner — no vitest, no supertest.
+  HTTP tests open a server on an ephemeral port and use `fetch`.
+
+###### Step 1 — 3.5.1 Persistence — **DONE (audit 2026-05-26)**
+
+Audit found a complete implementation already present. No work required;
+this step is a verification checklist for the implementer.
+
+**What exists:**
+
+- `src/persistence/db.ts` (467 lines) — factory `createDb(config)`,
+  driver dispatch `"sqlite"` / `"postgres"`, all three tables created
+  via `CREATE TABLE IF NOT EXISTS`, both drivers register identically.
+- Tables (created in `db.ts` lines 313–389):
+  - `processed_events` (intent_hash PK + chain_id, block_number, tx_hash,
+    log_index, symbol, price, timestamp, signer, router_id,
+    destination_index, processed_at_ms)
+  - `chain_state` (composite PK chain_id + contract_id, last_processed_block,
+    updated_at_ms)
+  - `transaction_log` (id auto + intent_hash, cardano_tx_hash, router_id,
+    destination_index, client_state_path, status, error_message,
+    submitted_at_ms, confirmed_at_ms)
+- Repos exposed on the adapter: `upsertProcessedEvent`, `hasProcessedEvent`,
+  `getLastProcessedBlock`, `setLastProcessedBlock`, `insertTransactionLog`,
+  `updateTransactionLog`, `getTransactionLog`, `migrate`.
+- `src/config/types.ts` already declares `DatabaseConfig` with
+  `driver: "sqlite" | "postgres"`.
+- `cmd/feeder/daemon-cmd.ts` already opens the DB (line 873 reads
+  `DATABASE_DRIVER` env; default path `state/<network>/feeder.sqlite`).
+- `clean-state.test.ts` already deletes `feeder.sqlite{,-shm,-wal}` files.
+
+**Verification for the implementer (no code changes expected):**
+
+- [ ] Run `npm run feeder` against Preview; confirm
+  `state/preview/feeder.sqlite` is created and accumulates rows in
+  `transaction_log` as txs are submitted.
+- [ ] `sqlite3 state/preview/feeder.sqlite ".schema"` shows all three
+  tables matching the columns above.
+- [x] Confirm the existing `transaction_log` schema is sufficient for
+  the API endpoints in Step 3 (`/api/v1/transactions/{txHash}` and
+  `/api/v1/symbols/{symbol}/updates`). If a column is needed and missing
+  (e.g. `symbol` is NOT in `transaction_log` currently — only in
+  `processed_events`), add a migration in `db.ts` and bump the schema
+  version. This is a gap to confirm/fix during Step 3.
+- [x] Confirm the existing tests pass: `npm test`.
+
+###### Step 2 — 3.5.3 Prometheus metrics — **partial surface; multiple gauges defined but never emitted**
+
+**2026-05-26 audit correction**: Several checkboxes were previously marked
+done that are actually false. The corrected status:
+
+Implemented and emitted at runtime:
+
+- [x] Default namespace renamed to `dia_bridge`.
+- [x] Constant labels now include `destination_chain`, `network`, and
+  `source_chain_id`.
+- [x] HTTP instrumentation is emitted with route-pattern labels.
+- [x] Stage histograms exist for scan→processing, processing→submission,
+  submission→confirmation, and end-to-end latency (all four emitted in
+  `daemon-cmd.ts`).
+- [x] Pipeline counters for detected, duplicate, invalid, scanned, routed,
+  filtered, submitted, confirmed, failed are emitted at runtime.
+- [x] Price-quality metrics for deviation and age — both emitted.
+- [x] Cardano tx context metrics for last confirmed timestamp and
+  pair action (`mint`/`update`) — both emitted.
+- [x] Tests cover namespace/default labels and registry output.
+
+Defined but **NEVER EMITTED** (corrected from previous false [x]):
+
+- [ ] `transactionsReorg` counter — no reorg detection code exists.
+  Addressed in Phase 3.5.5 below.
+- [ ] `scannerLastBlock`, `scannerBlockLag`, `scannerRpcErrors` — defined
+  in `metrics.ts` but `scanner-http.ts` and `scanner-ws.ts` do not receive
+  the metrics object. Addressed in Phase 3.5.4 Etapa 5 below.
+- [ ] `cardanoReceiverBalanceLovelace` — no post-confirm chain query.
+  Addressed in Phase 3.5.4 below.
+- [ ] `cardanoCoordinatorBalanceLovelace` — **wrong metric name** (the
+  coordinator is a withdrawal validator with no UTxO). Replaced by three
+  correctly-named gauges in Phase 3.5.4 below.
+- [ ] `cardanoReceiverTopupWarnings` — no threshold + check logic.
+  Addressed in Phase 3.5.4 below.
+
+Still open before calling this area fully closed operationally:
+
+- [ ] Run Preview verification so the documented non-zero metrics are proven
+  against live traffic rather than unit tests only (Phase 4).
+
+###### Step 3 — 3.5.2 HTTP API — **implemented in code and tests**
+
+- [x] Routes renamed to `/health`, `/health/live`, `/health/ready`,
+  `/metrics`, and `/api/v1/prices`.
+- [x] `GET /api/v1/prices/:symbol` returns one symbol across destinations.
+- [x] `GET /api/v1/symbols` lists configured router symbols.
+- [x] `GET /api/v1/symbols/:symbol/updates` returns joined DB history.
+- [x] `GET /api/v1/transactions/:txHash` returns enriched transaction views.
+- [x] `GET /api/v1/chains` and `GET /api/v1/chains/:id/status` expose source
+  chain status from YAML + runtime state.
+- [x] The persistence schema is sufficient for these queries; no migration
+  was required.
+- [x] `PriceCacheEntry` now carries confirmation depth and the API exposes it.
+- [x] `api.host`, `api.port` are wired from YAML.
+- [ ] `api.readiness.max_last_confirmed_age` — declared in YAML but **never
+  read into the health state** (2026-05-26 audit). Addressed in Phase 3.5.4
+  Etapa 8 below.
+- [x] HTTP request metrics are emitted with matched route labels.
+- [x] Tests cover every new endpoint and the route/error surface.
+
+###### Step 3.5.4 — Balance gauges, alerting block, confirmation depth, hardcoded values (2026-05-26 corrections)
+
+**Trigger**: 2026-05-26 audit found that the metrics surface has multiple
+gauges defined but never emitted; the `confirmation_depth` config is read
+but not enforced; `max_last_confirmed_age` is declared in YAML but never
+wired; and several tunables (in-flight timeout, retry policy defaults)
+are hardcoded constants. This step closes all of those.
+
+**Units convention (applies repo-wide)**
+
+- Balances: **lovelace** (1 ADA = 1 000 000 lovelace). All metric names
+  ending in `_lovelace` carry lovelace values. All YAML keys ending in
+  `_lovelace` carry lovelace values.
+- Time intervals: **seconds** unless suffix is `_ms`.
+- Price deviation: **percent (0–100)**.
+
+**Threshold authority**
+
+Two locations with explicit purpose:
+
+| Threshold lives in | Used for |
+| --- | --- |
+| `infrastructure.<network>.yaml::alerting.<key>` | The **feeder code** reads these to emit counters/warnings (e.g. `cardanoReceiverTopupWarnings`). |
+| `monitoring/alerts.yml` (Prometheus rules) | Prometheus evaluates these and fires alerts to operators. |
+
+The `alerts.yml` thresholds **must mirror** the YAML keys and carry an
+inline comment pointing at the canonical YAML location so the two cannot
+drift silently.
+
+**Etapa 0 — Cleanup of dead config + document Spectra divergences**
+
+**Trigger**: 2026-05-26 deeper audit (cross-checked against
+`diadata-org/Spectra-interoperability/services/bridge`) found two
+categories of cruft:
+
+1. Config keys declared in our YAML/types but **never read** by our code
+   AND **never read** by Spectra's code either (dead in both repos).
+2. Config keys we have that mention "deferred to M3" but Spectra actually
+   uses them and they are chain-agnostic — they belong in M2 (addressed
+   in Etapas B.1 and B.2 below).
+
+This Etapa removes (1) and tags genuine M3 placeholders (2) so an
+operator no longer sees confusing knobs that do nothing.
+
+**Spectra-parity reference table (canonical, all configs)**
+
+| Config key | Spectra uses? | Our feeder uses? | Decision |
+| --- | --- | --- | --- |
+| `event_processor.batch_size` | NO (declared, unused) | NO | **Delete** from types + YAML + validate |
+| `event_processor.validation_timeout` | NO | NO | **Delete** |
+| `recovery.*` (whole block) | NO (declared, unused) | NO | **Delete** entire block |
+| `health_check.timeout` | NO | NO | **Delete** |
+| `health_check.max_queue_size` | NO | NO | **Delete** |
+| `worker_pool.max_workers` | YES (per-router pool) | NO — Cardano lane model | **Delete from YAML + types**; document divergence in README (Spectra parity section). Reason: Cardano EUTxO requires per-receiver serialization; concurrency comes from multiple lanes (different clients), not workers within a lane. |
+| `worker_pool.task_queue_size` | YES | NO | **Delete**; same reason as `max_workers` |
+| `event_processor.enable_parallel_mode` | YES (parallel enrichment) | NO | **Keep declared; mark M3 in YAML comment**. Genuine optimisation for future high-throughput scenarios. |
+| `event_processor.parallel_worker_count` | YES | NO | **Keep declared; mark M3** |
+| `event_processor.parallel_queue_size` | YES | NO | **Keep declared; mark M3** |
+| `event_processor.parallel_timeout` | YES | NO | **Keep declared; mark M3** |
+| `block_scanner.backward_sync` | YES (active in scanner) | NO | **Implement in Etapa B.1 (this milestone)** |
+| `block_scanner.max_block_gap` | YES | NO | **Implement in Etapa B.1** |
+| `block_scanner.head_tracker_interval` | YES | NO | **Implement in Etapa B.1** |
+| `block_scanner.gap_detection_interval` | YES | NO | **Implement in Etapa B.1** |
+| `cron_service.*` (whole block) | YES (per-router cron) | NO | **Implement in Etapa B.2 (this milestone)** — required for `time_threshold` liveness when DIA events are filtered by deviation |
+| `replica.*` (whole block) | YES (HA failover) | NO | **Keep declared; mark M3**. Operational HA, doesn't affect functional correctness. |
+| `health_check.check_interval` | YES (ticker cadence) | NO | **Implement** as part of Etapa 8 (health rework) |
+| `health_check.max_processing_lag` | NO (declared, unused in Spectra) | YES — **our extension** | Keep; document as Cardano-feeder extension in README. |
+| `cardano.confirmation_depth` | N/A | YES | Keep; Cardano-specific. |
+| `alerting.*` | N/A | YES (added Etapa 1) | Keep; chain-agnostic but new in our feeder. |
+| `worker_pool.inflight_timeout_ms` | N/A | YES — **our extension** | Keep; Cardano-specific (EUTxO lock semantics). |
+
+**Files to modify in Etapa 0**
+
+- `src/config/types.ts` — delete dead fields from interfaces
+  (`EventProcessorConfig.batch_size`, `.validation_timeout`;
+  `HealthCheckConfig.timeout`, `.max_queue_size`;
+  `WorkerPoolConfig.max_workers`, `.task_queue_size`;
+  whole `RecoveryConfig` type and its reference in `InfrastructureConfig`).
+- `src/config/validate.ts` — remove validation for the deleted fields.
+- `config/infrastructure.preview.yaml` and `infrastructure.mainnet.yaml`:
+  - Delete the dead keys.
+  - Add `# M3 — declared but not implemented yet in this feeder`
+    comment ABOVE each block we keep as placeholder
+    (`enable_parallel_mode` + `parallel_*`, `replica` block).
+  - Add `cron_service:` block placeholder (filled in Etapa B.2).
+- `offchain/feeder/README.md` — new section
+  "Spectra parity and Cardano divergences" with the table above.
+
+**Acceptance**: `npm run feeder:dev -- --validate-only` accepts the new
+shape; deleted keys produce a YAML parse warning only if the user keeps
+the old key in their local .yaml (loader ignores unknown keys, no break).
+README documents every divergence with one sentence each.
+
+**Etapa 1 — Config schema and YAML**
+
+Files: `src/config/types.ts`, `src/config/validate.ts`,
+`config/infrastructure.preview.yaml`, `config/infrastructure.mainnet.yaml`,
+`offchain/feeder/README.md`.
+
+Add to both `infrastructure.<network>.yaml` files:
+
+```yaml
+alerting:
+  # All thresholds in lovelace (1 ADA = 1 000 000 lovelace) unless suffix
+  # says otherwise. These values are the canonical source; monitoring/alerts.yml
+  # must mirror them.
+  receiver_balance_low_lovelace: 2000000000          # 2 ADA — top-up needed
+  settle_overdue_lovelace: 10000000                  # 10 ADA accrued — run settle
+  payment_hook_withdraw_ready_lovelace: 50000000     # 50 ADA accumulated — DIA can withdraw
+  admin_wallet_low_lovelace: 5000000000              # 5 ADA — refill operator wallet
+  oracle_pair_stale_seconds: 3600                    # 1 h since last confirm — pair stale
+  price_deviation_high_percent: 5                    # p95 deviation > 5 % — possible misreport
+  price_age_high_seconds: 600                        # p95 source age > 10 min — DIA source stale
+
+worker_pool:
+  inflight_timeout_ms: 900000   # 15 min — previously hardcoded in inflight.ts
+  max_retries: 3                # was hardcoded fallback in retry-policy.ts
+  retry_delay_ms: 5000          # was hardcoded fallback in retry-policy.ts
+```
+
+Add the corresponding zod schemas in `types.ts`. `validate.ts` rejects
+load when any required key is missing — no silent fallbacks. README
+documents every new key with default + unit + meaning.
+
+Wire `api.readiness.max_last_confirmed_age` (already declared in YAML
+but never read) into the resolved config object.
+
+**Acceptance**: `npm run feeder:dev -- --validate-only` reports the new
+keys; missing keys produce a clear validation error.
+
+**Etapa 2 — Metrics types and renames**
+
+File: `src/api/metrics.ts`.
+
+- **Delete** `cardanoCoordinatorBalanceLovelace` (wrong concept — the
+  coordinator is a withdrawal validator with no UTxO balance).
+- **Add** these three gauges:
+  - `cardanoReceiverAccruedLovelace: FeedGauge` with label `client_id` —
+    the Receiver's `accruedToHookLovelace` (fees pending settle).
+  - `cardanoPaymentHookAccruedLovelace: FeedGauge` no labels —
+    the PaymentHook's `accruedFeesLovelace` (singleton across protocol).
+  - `cardanoAdminWalletLovelace: FeedGauge` no labels — sum of lovelace
+    in the operator wallet UTxOs (post-confirm).
+
+`noopMetrics` updated to match. Public Prometheus metric names:
+
+| Field | Prometheus name |
+| --- | --- |
+| `cardanoReceiverBalanceLovelace` | `dia_bridge_cardano_receiver_balance_lovelace` |
+| `cardanoReceiverAccruedLovelace` | `dia_bridge_cardano_receiver_accrued_lovelace` |
+| `cardanoPaymentHookAccruedLovelace` | `dia_bridge_cardano_payment_hook_accrued_lovelace` |
+| `cardanoAdminWalletLovelace` | `dia_bridge_cardano_admin_wallet_lovelace` |
+
+**Etapa 3 — Bridge exposes post-confirm state**
+
+File: `src/lib-bridge/index.ts`.
+
+After `waitForUnitUtxoReplacement` succeeds (current line ~487), and
+before `return { txHash, ... }` (current line ~519), perform three
+on-chain queries via Lucid:
+
+1. Re-fetch Receiver UTxO with `findSingleUtxoAtUnit(lucid, receiverValidatorAddress, receiverUnit, "receiver")`, decode via `decodeReceiverDatum()`. Extract `balanceLovelace`, `accruedToHookLovelace`.
+2. Fetch PaymentHook UTxO with `findSingleUtxoAtUnit(lucid, state.scripts.paymentHookValidatorAddress, state.scripts.paymentHookUnit, "payment hook")`, decode via `decodePaymentHookDatum()`. Extract `accruedFeesLovelace`.
+3. Fresh `wallet.getUtxos()` → sum `assets.lovelace` of each UTxO.
+
+Extend `OracleUpdateResult` and `OracleBatchUpdateResult` with a
+`postState` field carrying these four bigints:
+
+```ts
+postState: {
+  receiverBalanceLovelace: bigint;
+  receiverAccruedLovelace: bigint;
+  paymentHookAccruedLovelace: bigint;
+  adminWalletLovelace: bigint;
+};
+```
+
+`SubmitResultOk` in `src/submitter/types.ts` carries the same structure
+so the daemon receives it.
+
+Failure modes: if any of the three queries fails (chain provider hiccup),
+the bridge still returns the tx as confirmed but logs a warning and emits
+`postState` with whatever values could be obtained; missing values are
+**not silently zeroed** — they are omitted (typed as optional) so the
+daemon does not emit a misleading 0-value gauge.
+
+**Etapa 4 — Daemon emits gauges and topup warning**
+
+File: `cmd/feeder/daemon-cmd.ts`, inside the `onResult` callback (current
+line ~537), right after the existing `cardanoOracleLastConfirmedTimestampSeconds.set`
+block.
+
+```ts
+if (result.ok && result.postState) {
+  const { postState } = result;
+  metrics.cardanoReceiverBalanceLovelace.set(
+    { client_id: clientId },
+    Number(postState.receiverBalanceLovelace),
+  );
+  metrics.cardanoReceiverAccruedLovelace.set(
+    { client_id: clientId },
+    Number(postState.receiverAccruedLovelace),
+  );
+  metrics.cardanoPaymentHookAccruedLovelace.set(
+    {},
+    Number(postState.paymentHookAccruedLovelace),
+  );
+  metrics.cardanoAdminWalletLovelace.set(
+    {},
+    Number(postState.adminWalletLovelace),
+  );
+  if (
+    postState.receiverBalanceLovelace <
+    BigInt(alerting.receiver_balance_low_lovelace)
+  ) {
+    metrics.cardanoReceiverTopupWarnings.inc({ client_id: clientId });
+  }
+}
+```
+
+`alerting` is destructured from the resolved infrastructure config at
+daemon startup.
+
+**Etapa 5 — Scanner metrics**
+
+Files: `src/source/scanner-http.ts`, `src/source/scanner-ws.ts`,
+`cmd/feeder/daemon-cmd.ts`.
+
+Add a `metrics: FeedMetrics` field to `HttpScannerOptions` and
+`WsScannerOptions`. Pass the metrics object from `daemon-cmd.ts` where
+the scanners are constructed.
+
+In `scanner-http.ts` per tick:
+
+```ts
+metrics.scannerLastBlock.set({ chain_id, scanner_type: "http" }, Number(head));
+metrics.scannerBlockLag.set({ chain_id }, Number(head - cursor));
+```
+
+On RPC error (catch block around `client.getHeadBlockNumber()` and
+`getIntentRegisteredLogs()`):
+
+```ts
+metrics.scannerRpcErrors.inc({ chain_id, error_type });
+```
+
+`scanner-ws.ts` emits the same metrics on each batch + reconnect failure.
+`error_type` is one of: `"network"`, `"timeout"`, `"protocol"`, `"unknown"`.
+
+**Etapa 6 — Reorg detection + counter**
+
+Files: `src/errors/codes.ts`, `src/lib-bridge/index.ts`, `cmd/feeder/daemon-cmd.ts`.
+
+1. Add `FeederErrorCode.CARDANO_REORG_DROPPED` with remediation:
+   "A confirmed tx was rolled back. The feeder re-queued the intent."
+2. In the bridge, immediately after `awaitTxConfirmation` returns `true`
+   but before the wallet/UTxO replacement wait, re-query the tx by hash.
+   If the provider returns "not found" for a previously-confirmed tx, throw
+   a typed error carrying that code.
+3. In `daemon-cmd.ts`, when `result.ok === false && result.code === "CARDANO_REORG_DROPPED"`:
+
+   ```ts
+   metrics.transactionsReorg.inc({ symbol, client_id });
+   ```
+
+   The queue manager already re-enters the intent; no extra wiring needed.
+
+**Etapa 7 — `confirmation_depth` actually enforced**
+
+File: `src/lib-bridge/index.ts`.
+
+Today: `cardano.confirmation_depth` is read into the daemon's
+`cardanoConfirmationDepth` constant and written into the price cache
+entry, but the bridge does **not** wait that many blocks. Fix:
+
+After `awaitTxConfirmation` reports inclusion, capture
+`inclusionBlock = await lucid.provider.getTxBlockHeight(txHash)`.
+Loop:
+
+```ts
+while (true) {
+  const head = await lucid.provider.getBlockHeight();
+  if (head >= inclusionBlock + (confirmationDepth - 1)) break;
+  await sleep(20_000);
+}
+```
+
+`confirmationDepth` is passed into the bridge factory via
+`createRealOracleIntentBridge({ confirmationDepth })`. Default = 1 (current
+behaviour preserved).
+
+The daemon's `confirmedAtDepth` field in the price cache now correctly
+reflects the depth actually waited.
+
+**Etapa 8 — `/health/ready` honours `max_last_confirmed_age`**
+
+Files: `src/api/health.ts`, `cmd/feeder/daemon-cmd.ts`.
+
+Currently `health.ts` accepts an optional `maxLastSubmitAgeMs` and skips
+the check if missing. `daemon-cmd.ts` never sets it. Fix:
+
+1. Read `api.readiness.max_last_confirmed_age` (seconds) from the
+   resolved config.
+2. Pass it through to the health state factory as
+   `maxLastConfirmedAgeMs = api.readiness.max_last_confirmed_age * 1000`.
+3. In `readinessResult()`, return 503 when
+   `now - healthState.lastConfirmedMs > maxLastConfirmedAgeMs`.
+4. `daemon-cmd.ts` updates `healthState.lastConfirmedMs` in the existing
+   `onResult` block where `lastSubmitMs` is currently set.
+
+**Etapa 9 — Hardcoded fallbacks eliminated**
+
+Files: `src/submitter/inflight.ts`, `src/submitter/retry-policy.ts`,
+`cmd/feeder/daemon-cmd.ts`.
+
+- Delete `DEFAULT_TIMEOUT_MS = 15 * 60_000` from `inflight.ts`.
+  Accept the timeout as a required option in `makeInflightEntry(...)`.
+- Delete `DEFAULT_MAX_RETRIES` and `DEFAULT_RETRY_DELAY_MS` from
+  `retry-policy.ts`. Accept both as required options.
+- `daemon-cmd.ts` reads `worker_pool.{inflight_timeout_ms, max_retries,
+  retry_delay_ms}` from the validated config and passes them in.
+- Zod schema rejects load when any of the three are missing.
+
+**Etapa 10 — Tests**
+
+New / completed:
+
+- `src/api/__tests__/metrics.test.ts` — assert that the registry produces
+  the expected metric **lines and label values** when the gauges/counters
+  are exercised; cover all 4 balance gauges, topup warning, scanner
+  metrics, reorg counter.
+- `src/persistence/__tests__/db.test.ts` — direct CRUD against SQLite
+  in-memory; assert idempotent upserts.
+- `src/source/__tests__/scanner-http.test.ts` — fake `RegistryClient`;
+  assert `scannerLastBlock` / `scannerBlockLag` / `scannerRpcErrors`
+  emitted with correct labels.
+- `src/source/__tests__/scanner-ws.test.ts` — similar with WS mock.
+- `src/errors/__tests__/codes.test.ts` — every `FeederErrorCode` has a
+  remediation string; `classifyError()` matches expected inputs.
+- `src/lib-bridge/__tests__/post-state.test.ts` — assert `postState`
+  fields are populated and exposed through `OracleUpdateResult`; degraded
+  case (one query fails) leaves the field undefined, not zeroed.
+- `cmd/feeder/__tests__/reorg.test.ts` — simulate `CARDANO_REORG_DROPPED`
+  result and verify counter increments.
+
+**Etapa 11 — `monitoring/alerts.yml` rewritten**
+
+File: `offchain/feeder/monitoring/alerts.yml`.
+
+- **Remove** `CoordinatorBalanceLow` (metric never emitted; concept wrong).
+- **Keep** `OraclePairStale`, `ReceiverBalanceLow`, `PriceDeviationHigh`,
+  `PriceAgeHigh`.
+- **Add**:
+  - `SettleOverdue` — fires when
+    `cardano_receiver_accrued_lovelace > settle_overdue_lovelace` for 10 min.
+  - `PaymentHookWithdrawReady` — fires when
+    `cardano_payment_hook_accrued_lovelace > payment_hook_withdraw_ready_lovelace` for 10 min.
+  - `AdminWalletLow` — fires when
+    `cardano_admin_wallet_lovelace < admin_wallet_low_lovelace` for 5 min.
+  - `ReorgRateHigh` — fires when
+    `increase(dia_bridge_transactions_reorg_total[1h]) > 3`.
+- Every rule carries a header comment:
+  ```yaml
+  # Canonical threshold: infrastructure.<network>.yaml::alerting.<key>
+  ```
+- The numeric value in `expr` matches the YAML key.
+
+**Etapa 12 — Grafana dashboard updated**
+
+File: `offchain/feeder/monitoring/grafana/dashboards/feeder.json`.
+
+- Replace "Coordinator balance (per client)" panel with **three stat
+  panels** side by side: Receiver accrued (per client), PaymentHook
+  accrued (singleton), Admin wallet (singleton).
+- Keep "Receiver balance (per client)" — now backed by real data.
+- All four balance panels use a `currency_display` template variable so
+  the operator can toggle ADA / lovelace display.
+- Add `Reorg rate (1h)` panel sourced from `transactionsReorg`.
+
+**Etapa 13 — Plan doc updates**
+
+This section. Done as the spec is written.
+
+**Etapa B.1 — Block scanner gap recovery (Spectra parity)**
+
+**Trigger**: Spectra's `block_scanner_enhanced.go` has gap recovery the
+feeder lacks. After a restart with a stale checkpoint (or after a network
+outage that prevented checkpoint advance), Spectra detects the gap and
+backfills in chunks of 5000 blocks until caught up. Our scanner currently
+advances `block_range` blocks per tick (default 500), so a 9000-block gap
+takes 18 ticks (~3 min at `scan_interval: 10s`) to catch up — and during
+that window every event is processed sequentially via the regular flush
+path, which is slow and noisy.
+
+This Etapa replicates the Spectra behaviour for the DIA Lasernet source
+chain. It is chain-agnostic (the destination is irrelevant; the gap is
+in the source-chain scanner).
+
+**Config keys (already declared in `BlockScannerConfig`, now activated)**
+
+- `block_scanner.backward_sync: true|false` — master switch. When true,
+  the scanner runs gap detection alongside the normal poll loop.
+- `block_scanner.max_block_gap: number` — gap threshold (in blocks) above
+  which backfill kicks in. Default 5000.
+- `block_scanner.head_tracker_interval: duration` — how often a dedicated
+  loop polls the chain head (independent of `scan_interval`). Default
+  `30s`.
+- `block_scanner.gap_detection_interval: duration` — how often the gap
+  detector compares persisted checkpoint vs head. Default `60s`.
+
+**Files to modify / create**
+
+- `src/source/scanner-http.ts` — accept `maxBlockGap`,
+  `headTrackerInterval`, `gapDetectionInterval` in options. The existing
+  per-tick poll stays as-is.
+- New `src/source/head-tracker.ts` — async loop that calls
+  `client.getHeadBlockNumber()` every `head_tracker_interval` and updates
+  an in-memory `latestHead` shared with the gap detector.
+- New `src/source/gap-detector.ts` — async loop that every
+  `gap_detection_interval` reads the persisted checkpoint and compares
+  against `latestHead`. If `head - checkpoint > max_block_gap`, schedule a
+  `backfillRange(from, to)` task.
+- `src/source/backfill.ts` — runs `getIntentRegisteredLogs(from, to)` in
+  5000-block chunks (mirrors Spectra constant `backwardBatchSize`); emits
+  each batch via the same `processLogBatch` sink as the regular scanner.
+  Advances checkpoint atomically per chunk so a crash mid-backfill resumes
+  from the last completed chunk.
+- `cmd/feeder/daemon-cmd.ts` — wire the new loops alongside the existing
+  scanner; pass `metrics` so backfill activity emits its own counter:
+  `dia_bridge_scanner_backfill_blocks_total{chain_id}` and
+  `dia_bridge_scanner_backfill_chunks_total{chain_id}`.
+- `src/api/metrics.ts` — add the two new counters.
+
+**Concurrency note**: the regular polling loop and the backfill loop must
+not race on the same range. The backfill claims a `[from, to]` window
+ATOMICALLY by writing a "backfill_in_progress" marker into the checkpoint
+table; the polling loop respects the marker (waits until backfill clears
+it before advancing). Same pattern as Spectra.
+
+**Tests**: `src/source/__tests__/backfill.test.ts` with a fake
+`RegistryClient` that reports a 12 000-block gap; assert the backfill
+processes in 3 chunks of 5000+5000+2000.
+
+**Acceptance**: start the feeder with `--clean` against a checkpoint set
+12 000 blocks behind head; feeder catches up via backfill (visible in
+metrics) in 1–2 ticks of `gap_detection_interval`; normal poll resumes
+afterwards.
+
+**Etapa B.2 — Cron service for `time_threshold` liveness (Spectra parity)**
+
+**Trigger**: Spectra's `internal/cron/cron_service.go` runs a per-router
+timer that re-pushes the latest cached price to the destination chain
+when the `time_threshold` for that destination has elapsed since the
+last on-chain confirmation. Without this, a pair can stay stale on chain
+even when DIA is emitting events — because the router policy (price
+deviation filter) may drop every event for hours if the price barely
+moves.
+
+The Catalyst M2 milestone requires "uptime and accuracy reports of the
+oracle data" and "demonstrates oracle liveness". Cron service is the
+mechanism that guarantees a configurable per-pair maximum staleness.
+
+**Config keys (new)**
+
+In `infrastructure.<network>.yaml`:
+
+```yaml
+cron_service:
+  # Master switch. When false, all routers behave as today (purely
+  # event-driven). When true, each destination with `cron: true` gets a
+  # per-(routerId, symbol) timer.
+  enabled: true
+  # Cadence at which the cron service checks every monitored destination.
+  # Spectra uses a per-router cron expression; we use a single tick interval
+  # for simplicity and apply each destination's own time_threshold inside
+  # the tick.
+  tick_interval: 30s
+```
+
+In `routers/<router>.yaml` per destination (additive — does not break
+existing configs):
+
+```yaml
+destinations:
+  - cardano:
+      network: Preview
+      client_state_path: ...
+      protocol_state_path: ...
+    triggers:
+      conditions: [...]
+    # NEW: enable cron-driven liveness for this destination.
+    cron: true
+    # NEW: max staleness before cron forces an update.
+    time_threshold: 5m
+```
+
+**Files to modify / create**
+
+- `src/config/types.ts` — add `CronServiceConfig` to `InfrastructureConfig`.
+  Add `cron: boolean` and `time_threshold: string` to `RouterDestination`.
+- `src/config/validate.ts` — validate `tick_interval` and the new
+  per-destination fields.
+- New `src/cron/cron-service.ts` — schedules a `setInterval` at
+  `tick_interval`. Each tick:
+  1. For every router with at least one `cron: true` destination, iterate
+     its destinations.
+  2. For each cron-enabled destination, look up the **last confirmed tx**
+     for the (clientId, symbol) pair in the price cache or DB.
+  3. If `now - lastConfirmedMs > timeThresholdMs`, take the latest intent
+     for that symbol from the price cache (the most recent enriched
+     intent seen by the feeder), and re-submit it via
+     `queueManager.submit(...)` with a synthetic `SubmitRequest` carrying
+     `source: "cron"` in metadata.
+  4. The queue's normal retry policy and inflight-locking apply.
+- `cmd/feeder/daemon-cmd.ts` — wire the cron service after queue manager
+  setup; pass `metrics`, `priceCache`, `db`, and `routerRegistry`.
+- `src/api/metrics.ts` — add counter
+  `cron_resubmissions_total{router_id, symbol, client_id, outcome}` where
+  `outcome` is `"submitted"`, `"skipped_already_fresh"`, or
+  `"skipped_no_intent"`.
+- `src/api/__tests__/server.test.ts` — extend `/api/v1/transactions/:hash`
+  test to assert the response includes a `triggered_by: "event" | "cron"`
+  field so consumers can distinguish.
+- `src/persistence/db.ts` — add `triggered_by` column to `transaction_log`
+  (default `"event"`). Backfill existing rows with `"event"`.
+
+**Why this matches Spectra's behaviour**
+
+Spectra's cron service:
+1. Iterates `monitoredDestinations` per cron tick.
+2. For each: reads the latest `priceCache` entry and the last on-chain
+   timestamp.
+3. If `time_threshold` exceeded → calls the same `sendToChain` path the
+   event-driven flow uses.
+4. The destination contract's own monotonicity check prevents replay of
+   already-submitted intents (`nextTimestamp > lastTimestamp`).
+
+Our implementation mirrors this 1:1. The Cardano destination contract
+already enforces monotonicity on `(timestamp, nonce)` so replaying an
+older intent is a no-op at chain level; the cron service additionally
+gates by checking the price-cache `intentHash` against the last submitted
+hash for that pair.
+
+**Tests**
+
+- `src/cron/__tests__/cron-service.test.ts` — fake clock; assert tick
+  every `tick_interval`; assert submission when time_threshold elapsed;
+  assert NO submission when within the window; assert NO submission when
+  the cached intent is the same hash as last submitted.
+- Integration: extend `cmd/feeder/__tests__/daemon-pipeline.test.ts` with
+  a cron path scenario.
+
+**Acceptance**: with `cron_service.enabled: true` and a router's
+destination set to `cron: true` + `time_threshold: 30s`, freeze the
+DIA source (no new events) — the feeder still pushes the last cached
+intent every 30s as long as a newer-than-on-chain intent exists in the
+cache. Counter `cron_resubmissions_total{outcome="submitted"}` increments
+once per tick that triggers.
+
+**Etapa 14 — README updates**
+
+File: `offchain/feeder/README.md`.
+
+- New section "Thresholds and alerts" with the full table mapping each
+  alert → metric → YAML key → unit.
+- Clarify that `confirmedAtDepth` now reflects the depth actually waited
+  by the feeder (was previously misleading).
+- Document the `alerting:` and `worker_pool:` blocks under "Config layout".
+
+**Acceptance (rolled up)**
+
+- `npm run typecheck` — clean.
+- `npm test` — all tests pass including new ones.
+- `npm run feeder:dev -- --validate-only` — accepts the new config
+  blocks; clearly errors when a required key is missing.
+- A confirmed oracle update tx produces non-zero values for the four
+  balance gauges, the receiver-accrued counter (when above threshold),
+  and the topup-warning counter (when receiver is below threshold).
+- A simulated reorg (provider returns 404 for a previously-confirmed tx)
+  increments `transactionsReorg` and re-queues the intent.
+- `/health/ready` returns 503 when the last confirmed tx is older than
+  `api.readiness.max_last_confirmed_age`.
+- `alerts.yml` thresholds match `infrastructure.<network>.yaml::alerting.<key>`
+  one-to-one.
+
+###### Step 4 — 3.6 Monitoring profile
+
+**Files to create:**
+
+- `offchain/feeder/monitoring/prometheus.yml` — scrape config:
+  ```yaml
+  global:
+    scrape_interval: 15s
+  scrape_configs:
+    - job_name: feeder
+      static_configs:
+        - targets: ["feeder-sqlite:8080"]
+      metrics_path: /metrics
+  rule_files:
+    - alerts.yml
+  ```
+- `offchain/feeder/monitoring/alerts.yml` — three alert rules (staleness,
+  receiver balance, coordinator balance) as defined in 3.6 above.
+- `offchain/feeder/monitoring/grafana/provisioning/datasources/prometheus.yml`
+  — Prometheus datasource pointing at `prometheus:9090`.
+- `offchain/feeder/monitoring/grafana/provisioning/dashboards/dashboards.yml`
+  — provisioning manifest pointing at `/var/lib/grafana/dashboards`.
+- `offchain/feeder/monitoring/grafana/dashboards/feeder.json` — single
+  pre-provisioned dashboard with these panels (designed by implementer
+  per user instruction):
+
+  | Row | Panel | Type | Query |
+  |---|---|---|---|
+  | 1 | Pair staleness (per symbol) | Stat / Table | `time() - dia_bridge_cardano_oracle_last_confirmed_timestamp_seconds` |
+  | 1 | Receiver balance (per client) | Gauge | `dia_bridge_cardano_receiver_balance_lovelace` |
+  | 1 | Coordinator balance (per client) | Gauge | `dia_bridge_cardano_coordinator_balance_lovelace` |
+  | 2 | End-to-end latency (p50/p95/p99) | TimeSeries | `histogram_quantile(0.5/0.95/0.99, sum(rate(dia_bridge_end_to_end_latency_seconds_bucket[5m])) by (le, symbol))` |
+  | 2 | Tx confirmed rate (5m) | TimeSeries | `sum by (symbol) (rate(dia_bridge_transactions_confirmed_total[5m]))` |
+  | 2 | Tx failed rate (5m) | TimeSeries | `sum by (error_code) (rate(dia_bridge_transactions_failed_total[5m]))` |
+  | 3 | Reorg counter | Stat | `sum(increase(dia_bridge_transactions_reorg_total[1h]))` |
+  | 3 | Scanner block lag | TimeSeries | `dia_bridge_scanner_block_lag` |
+  | 3 | Intents filtered by reason | TimeSeries | `sum by (reason) (rate(dia_bridge_intents_filtered_total[5m]))` |
+  | 4 | Price deviation distribution | Heatmap | `sum by (le, symbol) (rate(dia_bridge_price_deviation_percent_bucket[5m]))` |
+
+  All dashboard JSON values that look like thresholds (panel `min`, alert
+  ceilings) must reference Grafana variables loaded from a `dashboard.yaml`
+  variables block — not hardcoded.
+
+**Files to modify:**
+
+- `offchain/feeder/docker-compose.yml` — add `monitoring` profile with
+  `prometheus` and `grafana` services. Both have healthchecks and persistent
+  volumes. Network: same as feeder (default).
+- `offchain/feeder/README.md` — "Monitoring" section: how to start the
+  monitoring stack, how to access Grafana (port 3000, default credentials
+  from env), how to add a new alert rule.
+
+**Acceptance:**
+
+- `docker-compose --profile sqlite --profile monitoring up` brings up
+  feeder + Prometheus + Grafana; Grafana shows the dashboard with live
+  data within 30 seconds.
+- All three alert rules visible in Prometheus `/alerts`.
+
+###### Step 4.5 — Docker: unified feeder + CLI image (M2-blocking)
+
+**Why this step exists**
+
+The feeder (`offchain/feeder/`) and the CLI (`offchain/cli/`) are two
+TypeScript packages but **one operational system**. An operator running
+the feeder also needs the CLI for:
+
+- bootstrap (`protocol:init`, `client:init`, `receiver:bootstrap`,
+  `receiver:parameterize`, `reference-scripts:publish-client`)
+- pair lifecycle (`pair:burn`, `pair:dedup`, `pair:update-min-utxo`)
+- treasury (`receiver:top-up`, `receiver:withdraw`,
+  `payment-hook:withdraw`)
+- settle and reconciliation (`settle`, `reclaim-reference-script`,
+  `config:update`)
+- diagnostics (`protocol`, `wallet`, `wallet:utxos`, `blueprint:list`)
+
+There is no scenario where an operator runs the feeder Docker container
+but does **not** want CLI access. Without a documented Docker path for
+the CLI, operators are forced to install Node 22, `npm ci` two
+packages, and resolve any platform-specific `node-gyp` issues
+(better-sqlite3, lucid-evolution) on the host — the very pain Docker is
+supposed to eliminate.
+
+**Latent runtime bug this step also fixes:** the feeder's
+`src/lib-bridge/index.ts:110` and `reconcile.ts:52` dynamically import
+CLI modules at runtime via
+`path.resolve(__dirname, "../../../cli/src")`. The current Dockerfile
+copies only `offchain/feeder/{cmd,src}` — it does **not** include
+`offchain/cli/` — so `submitOracleUpdate` would fail at runtime in the
+container with `ERR_MODULE_NOT_FOUND` the first time it tries
+`import("/app/cli/src/core/config.js")`. This step copies the
+**compiled** CLI dist into the image and overrides the bridge's
+`cliSrcRoot` to that path, fixing both the bug and the CLI-access need
+in one stroke.
+
+**Architecture decision: one image, two compose services**
+
+The single image `dia-cardano-feeder:local` contains:
+
+- compiled feeder (`/app/feeder/dist/`) with feeder's prod deps in
+  `/app/feeder/node_modules/`
+- compiled CLI (`/app/cli/dist/`) with CLI's prod deps in
+  `/app/cli/node_modules/`
+- a thin wrapper script `/usr/local/bin/dia-cli` that execs
+  `node /app/cli/dist/index.js "$@"` so operators can type
+  `dia-cli protocol` instead of the full path
+
+The compose file declares two services backed by this same image:
+
+- `feeder-sqlite` / `feeder-postgres` — long-running daemon
+  (existing behaviour, no change beyond pointing at the new entrypoint)
+- `cli` — short-lived, on-demand container under profile `cli`,
+  invoked by `docker compose run --rm cli <command> [args...]`
+
+**Why one image and not two:**
+
+- The image already has to include the CLI source/dist to fix the
+  lib-bridge runtime bug. Maintaining a second image with the same
+  artefacts is duplication.
+- Operators publish, version, and pin **one** artefact tag
+  (`dia-cardano-feeder:vX.Y.Z`). No risk of feeder and CLI drifting to
+  different versions in production.
+- The size delta is small (CLI dist + lucid-evolution prod deps overlap
+  heavily with feeder prod deps).
+
+**Files to modify**
+
+**1. `offchain/feeder/Dockerfile` — rewrite to build both packages.**
+
+The Dockerfile currently lives in `offchain/feeder/` and runs with
+build context `offchain/feeder/` (set by `docker-compose.yml`). To
+build the CLI alongside the feeder, the **build context must move up
+to `offchain/`** so the Dockerfile can `COPY cli/ ./cli/` and
+`COPY feeder/ ./feeder/`.
+
+New Dockerfile structure (full file, replaces the existing 47-line
+Dockerfile):
+
+```dockerfile
+# syntax=docker/dockerfile:1
+# ---------------------------------------------------------------------------
+# Stage 1 — build CLI: compile TypeScript → JavaScript
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS cli-build
+WORKDIR /build/cli
+
+# Build tools needed by better-sqlite3 / lucid-evolution native deps.
+RUN apk add --no-cache python3 make g++
+
+COPY cli/package.json cli/package-lock.json* ./
+RUN npm ci --ignore-scripts
+
+COPY cli/tsconfig.json ./
+COPY cli/src ./src
+RUN npm run build
+
+# Prune dev deps for the runtime stage.
+RUN npm prune --omit=dev
+
+# ---------------------------------------------------------------------------
+# Stage 2 — build feeder
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS feeder-build
+WORKDIR /build/feeder
+
+RUN apk add --no-cache python3 make g++
+
+COPY feeder/package.json feeder/package-lock.json* ./
+RUN npm ci --ignore-scripts
+
+COPY feeder/tsconfig.json ./
+COPY feeder/cmd ./cmd
+COPY feeder/src ./src
+RUN npm run build
+
+RUN npm prune --omit=dev
+
+# ---------------------------------------------------------------------------
+# Stage 3 — runtime: feeder + CLI in one lean image
+# ---------------------------------------------------------------------------
+FROM node:22-alpine AS runtime
+WORKDIR /app
+
+# Feeder artefacts.
+COPY --from=feeder-build /build/feeder/package.json /app/feeder/package.json
+COPY --from=feeder-build /build/feeder/node_modules /app/feeder/node_modules
+COPY --from=feeder-build /build/feeder/dist /app/feeder/dist
+
+# CLI artefacts.
+COPY --from=cli-build /build/cli/package.json /app/cli/package.json
+COPY --from=cli-build /build/cli/node_modules /app/cli/node_modules
+COPY --from=cli-build /build/cli/dist /app/cli/dist
+
+# Convenience wrapper for operators: `dia-cli <command>` from any shell.
+RUN printf '#!/bin/sh\nexec node /app/cli/dist/index.js "$@"\n' > /usr/local/bin/dia-cli \
+    && chmod +x /usr/local/bin/dia-cli
+
+# Mount points for config and on-chain artefacts (see "Volume layout" below).
+RUN mkdir -p /config /state /artifacts \
+    && chown -R node:node /config /state /artifacts
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- http://localhost:8080/health/live || exit 1
+
+USER node
+
+# Default: feeder daemon. Override `command:` in compose to invoke CLI.
+# Entrypoint deliberately NOT set so each service can specify its own.
+CMD ["node", "/app/feeder/dist/cmd/feeder/main.js", "--config", "/config"]
+```
+
+Notes for the implementer:
+
+- The `apk add python3 make g++` only runs in the build stages; the
+  runtime image stays slim (just `node:22-alpine`).
+- `npm prune --omit=dev` after `npm run build` keeps `node_modules`
+  production-only without re-installing.
+- The runtime stage does **not** run `npm ci` — it copies pruned
+  `node_modules` from the build stages.
+- `dia-cli` wrapper is set up in `/usr/local/bin` so it is on `$PATH`
+  inside any exec/run session.
+- `ENTRYPOINT` is intentionally removed. Each compose service declares
+  its own `command:` (feeder daemon vs CLI). This avoids the previous
+  setup where `ENTRYPOINT ["node", "dist/cmd/feeder/main.js"]` made it
+  awkward to invoke a different binary.
+
+**2. `offchain/feeder/src/lib-bridge/index.ts` and `reconcile.ts` — make
+the CLI module root configurable via env, default to current behaviour.**
+
+Add a new env-driven override so the feeder can locate CLI modules
+inside the Docker image (where `cli` is a sibling of `feeder`, not of
+`feeder/src/lib-bridge`):
+
+- At [src/lib-bridge/index.ts:108-110](offchain/feeder/src/lib-bridge/index.ts#L108-L110)
+  and [src/lib-bridge/reconcile.ts:50-52](offchain/feeder/src/lib-bridge/reconcile.ts#L50-L52),
+  replace the current resolution with:
+
+  ```ts
+  // CLI module root resolution priority (highest to lowest):
+  //   1. explicit options.cliSrcRoot (programmatic override, tests)
+  //   2. env CARDANO_FEEDER_CLI_DIST_ROOT
+  //      (set by Docker image to /app/cli/dist; documented in YAML schema
+  //       comment block "Runtime paths — env-only" of routers/preview.yaml)
+  //   3. fallback: ../../../cli/src relative to this module (dev mode under tsx)
+  const cliSrcRoot = options.cliSrcRoot
+    ? path.resolve(options.cliSrcRoot)
+    : process.env.CARDANO_FEEDER_CLI_DIST_ROOT
+      ? path.resolve(process.env.CARDANO_FEEDER_CLI_DIST_ROOT)
+      : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../cli/src");
+  ```
+
+- Document `CARDANO_FEEDER_CLI_DIST_ROOT` in
+  [offchain/feeder/.env.example](offchain/feeder/.env.example) with a
+  comment: "Absolute path to the directory containing compiled CLI
+  JavaScript (`index.js`, `core/`, `lib/transactions/`). Defaults to
+  `<feeder>/../cli/src` in dev mode. In the published Docker image
+  this is set automatically to `/app/cli/dist`."
+
+- In the Dockerfile add: `ENV CARDANO_FEEDER_CLI_DIST_ROOT=/app/cli/dist`
+  immediately before the `CMD` line.
+
+This follows the "no hardcoded values" rule: the path is env-driven
+with a sane dev-mode default.
+
+**3. `offchain/feeder/docker-compose.yml` — move build context up,
+add `cli` service, add named volume for artefacts.**
+
+Replace the existing file with (annotated):
+
+```yaml
+# Build context moves from `.` (feeder/) up to `..` (offchain/) so both
+# packages are visible. dockerfile path becomes feeder/Dockerfile.
+
+services:
+  feeder-sqlite:
+    profiles: ["sqlite"]
+    build:
+      context: ..
+      dockerfile: feeder/Dockerfile
+      target: runtime
+    image: dia-cardano-feeder:local
+    restart: unless-stopped
+    ports: ["8080:8080"]
+    volumes:
+      - ./config:/config:ro
+      - feeder-state-sqlite:/state
+      - feeder-artifacts:/artifacts   # CLI writes here; feeder reads
+    env_file: [.env]
+    environment:
+      DATABASE_DRIVER: sqlite
+      DATABASE_PATH_PREVIEW: /state/preview/feeder.sqlite
+      DATABASE_PATH_MAINNET: /state/mainnet/feeder.sqlite
+      # CARDANO_FEEDER_CLI_DIST_ROOT already set by Dockerfile ENV.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  feeder-postgres:
+    profiles: ["postgres"]
+    build: { context: .., dockerfile: feeder/Dockerfile, target: runtime }
+    image: dia-cardano-feeder:local
+    # ... (same as today plus the artifacts volume) ...
+    volumes:
+      - ./config:/config:ro
+      - feeder-artifacts:/artifacts
+
+  postgres:
+    # ... (unchanged) ...
+
+  # ----- NEW: CLI service -----
+  cli:
+    profiles: ["cli"]
+    build: { context: .., dockerfile: feeder/Dockerfile, target: runtime }
+    image: dia-cardano-feeder:local
+    # No restart, no healthcheck — short-lived one-shot container.
+    entrypoint: ["dia-cli"]
+    command: ["help"]              # default if `run` invoked without args
+    volumes:
+      - ./config:/config:ro
+      - feeder-artifacts:/artifacts # writes protocol/client state here
+      - feeder-state-sqlite:/state  # for `settle`/`pair:dedup` which may
+                                    # consult feeder DB (mount even when
+                                    # postgres profile is active; settle
+                                    # CLI does not touch sqlite directly,
+                                    # so the unused mount is harmless)
+    env_file: [.env]
+    stdin_open: true               # for interactive prompts (@inquirer)
+    tty: true
+
+  prometheus:
+    profiles: ["monitoring"]
+    # ... (see Step 4) ...
+
+  grafana:
+    profiles: ["monitoring"]
+    # ... (see Step 4) ...
+
+volumes:
+  feeder-state-sqlite:
+  feeder-artifacts:                 # shared between feeder + cli services
+  postgres-data:
+```
+
+Key changes vs. today's compose file:
+
+- `build.context` moves from `.` (feeder/) to `..` (offchain/) so the
+  Dockerfile can see `cli/` and `feeder/` as siblings. `dockerfile`
+  becomes `feeder/Dockerfile`.
+- New named volume `feeder-artifacts` mounted at `/artifacts` in **all
+  services**. This is where the CLI writes
+  `state/<network>/protocol.json`, `state/<network>/clients/<id>/...`,
+  and where the feeder reads `client_state_path` /
+  `protocol_state_path` from.
+- New `cli` service under `profiles: ["cli"]`. Same image, different
+  entrypoint, short-lived. `stdin_open + tty` so `@inquirer/prompts`
+  works for interactive CLI commands.
+
+**4. `offchain/feeder/.env.example` — document new variables.**
+
+Add:
+
+```dotenv
+# Path inside the container where the compiled CLI is installed.
+# The Docker image sets this automatically to /app/cli/dist; only override
+# if running the feeder outside Docker against a non-standard CLI checkout.
+# CARDANO_FEEDER_CLI_DIST_ROOT=/app/cli/dist
+
+# Where the CLI writes (and the feeder reads) protocol/client state files.
+# In Docker this is the `feeder-artifacts` named volume mounted at /artifacts.
+# In bare-node dev mode it defaults to offchain/cli/state/.
+# CARDANO_ARTIFACTS_ROOT=/artifacts
+```
+
+The second var (`CARDANO_ARTIFACTS_ROOT`) is consumed wherever
+client/protocol state paths are resolved. If this env-var pathway
+does not exist yet today (the CLI uses `process.cwd()`-relative
+`state/<network>/...`), the implementer must check the CLI's
+`core/config.ts` and `core/intent-paths.ts` and add an env override
+there before the Docker work — otherwise the CLI inside the container
+will create files relative to `/app` instead of `/artifacts`. This is
+a hard prerequisite for the CLI service to be useful in Docker.
+
+**5. New: `offchain/Makefile` — operator ergonomics.**
+
+A short Makefile at the **`offchain/`** root (so commands work from
+either `feeder/` or `cli/`) wrapping the most common operator
+gestures. No make-magic; just aliases that document themselves with
+`make help`.
+
+```makefile
+# DIA Cardano Oracle — operator shortcuts.
+# All targets run from offchain/feeder/ (where docker-compose.yml lives).
+
+COMPOSE := docker compose -f feeder/docker-compose.yml --project-directory feeder
+
+.PHONY: help
+help: ## Show this help
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F: '{printf "  %-22s %s\n", $$1, $$NF}'
+
+.PHONY: build
+build: ## Build the unified feeder + CLI image
+	$(COMPOSE) --profile sqlite build
+
+.PHONY: up
+up: ## Start the feeder daemon (sqlite profile)
+	$(COMPOSE) --profile sqlite up -d
+
+.PHONY: up-postgres
+up-postgres: ## Start the feeder daemon (postgres profile)
+	$(COMPOSE) --profile postgres up -d
+
+.PHONY: up-monitoring
+up-monitoring: ## Start feeder + Prometheus + Grafana
+	$(COMPOSE) --profile sqlite --profile monitoring up -d
+
+.PHONY: down
+down: ## Stop everything
+	$(COMPOSE) down
+
+.PHONY: logs
+logs: ## Tail feeder logs
+	$(COMPOSE) logs -f feeder-sqlite
+
+.PHONY: cli
+cli: ## Run a CLI command. Usage: make cli CMD="protocol"
+	$(COMPOSE) --profile cli run --rm cli $(CMD)
+
+.PHONY: bootstrap
+bootstrap: ## End-to-end protocol bootstrap (one-shot)
+	$(COMPOSE) --profile cli run --rm cli protocol:init
+	$(COMPOSE) --profile cli run --rm cli config:parameterize
+	$(COMPOSE) --profile cli run --rm cli config:reference-scripts
+	$(COMPOSE) --profile cli run --rm cli config:bootstrap
+```
+
+The `bootstrap` target is illustrative; the implementer should adapt
+it to the canonical bootstrap sequence documented in
+`docs/operator/bootstrap.md` (whichever order is current there).
+
+**6. Documentation deliverables — UPDATE existing files.**
+
+These files exist today; they describe the bare-node (`npm run cli`)
+workflow only. **Update them, do not create parallel "Docker setup"
+files.** Each file gets a "Running with Docker" subsection that
+mirrors the existing bare-node instructions step-for-step.
+
+- [offchain/cli/README.md](offchain/cli/README.md) — for every
+  command example currently written as `npm run cli -- <cmd>`, add a
+  second example block immediately below:
+  `docker compose --profile cli run --rm cli <cmd>`. Add a top-level
+  "Running in Docker" subsection that explains the unified image
+  (one image, daemon = feeder, on-demand = CLI), the
+  `feeder-artifacts` volume layout, and how to inspect state files
+  from the host (`docker compose run --rm cli ls /artifacts`).
+
+- [offchain/feeder/README.md](offchain/feeder/README.md) — currently
+  contains the daemon-only Docker quickstart. Expand the "Docker"
+  section into three subsections:
+  - **Daemon only**: existing `docker-compose --profile sqlite up`
+    flow.
+  - **Daemon + monitoring**: `--profile sqlite --profile monitoring up`,
+    Grafana on port 3000.
+  - **Admin commands (CLI)**: `docker compose --profile cli run --rm
+    cli <command>`. List the top-10 commands an operator needs in
+    practice (protocol, wallet, wallet:utxos, protocol:init,
+    client:init, receiver:bootstrap, receiver:top-up,
+    reference-scripts:publish-client, settle, pair:burn).
+  - **One-shot full bootstrap**: `make bootstrap` or the equivalent
+    series of `docker compose run --rm cli ...` calls.
+
+- [README.md](README.md) (repo root) — the project README currently
+  points at the two sub-READMEs. Add a single paragraph "Running with
+  Docker" that says: "Both the feeder daemon and all CLI admin
+  commands ship in one Docker image. See
+  [`offchain/feeder/README.md`](offchain/feeder/README.md#docker) for
+  the canonical quickstart." Do not duplicate compose commands here.
+
+- Any operator runbook under `docs/operator/` that today says
+  `npm run cli -- <cmd>` — update to show both forms with the Docker
+  form **listed first** (since that is the supported deployment).
+  If no such runbook exists yet, mark this as a separate doc task; do
+  not block this Step on writing one.
+
+**Volume layout reference (for both Dockerfile + README):**
+
+| Host path | Container path | Mode | Used by | Contents |
+|---|---|---|---|---|
+| `./config/` | `/config` | ro | feeder, cli | modular YAML config |
+| `.env` | env_file | ro | feeder, cli | secrets + selectors |
+| Volume `feeder-state-sqlite` | `/state` | rw | feeder, cli | SQLite DB, scanner checkpoint, JSONL logs |
+| Volume `feeder-artifacts` | `/artifacts` | rw | feeder, cli | protocol/client/pair JSON state files |
+| Volume `postgres-data` | (postgres svc) | rw | postgres | Postgres data dir (postgres profile only) |
+| Volume `grafana-data` | `/var/lib/grafana` | rw | grafana | dashboard state (monitoring profile only) |
+
+**Operator use cases — every flow we support, with exact commands.**
+
+The README must document each of these explicitly. The list is the
+acceptance source-of-truth: if any flow is missing from the README
+the step is not done.
+
+1. **First-time bootstrap (fresh Preview deployment):**
+   ```bash
+   cp offchain/feeder/.env.example offchain/feeder/.env
+   # edit .env: Blockfrost keys, signer keys, etc.
+   cd offchain && make build
+   make cli CMD="wallet:create"
+   make cli CMD="protocol:init"
+   make cli CMD="config:parameterize"
+   make cli CMD="config:reference-scripts"
+   make cli CMD="config:bootstrap"
+   make cli CMD="client:init"
+   make cli CMD="receiver:bootstrap"
+   make cli CMD="receiver:parameterize"
+   make cli CMD="reference-scripts:publish-client"
+   ```
+
+2. **Start the feeder (sqlite):**
+   `make up` then `make logs`.
+
+3. **Start the feeder with monitoring:**
+   `make up-monitoring`, open `http://localhost:3000`.
+
+4. **Top up the receiver:**
+   `make cli CMD="receiver:top-up --amount-lovelace 1000000000"`.
+
+5. **Trigger a manual settle (until Phase 3.7 auto-settle lands):**
+   `make cli CMD="settle"`.
+
+6. **Burn a pair / dedup a pair / inspect protocol state:**
+   `make cli CMD="pair:burn --symbol BTC/USD"`
+   `make cli CMD="pair:dedup --symbol BTC/USD"`
+   `make cli CMD="protocol"`
+
+7. **Inspect what's inside the artefacts volume:**
+   `make cli CMD="wallet:utxos"`
+   or for raw inspection:
+   `docker compose --profile cli run --rm --entrypoint sh cli -c "ls -R /artifacts"`
+
+8. **Switch network (Preview → Mainnet):**
+   set `CARDANO_NETWORK=Mainnet` in `.env`, restart. All artefact and
+   state paths inside the container key off `CARDANO_NETWORK`; the
+   `feeder-artifacts` volume can hold both networks side by side
+   under `/artifacts/preview/` and `/artifacts/mainnet/`.
+
+9. **Run the CLI against a host-side state directory (dev only):**
+   ```bash
+   docker compose --profile cli run --rm \
+     -v $(pwd)/offchain/cli/state:/artifacts \
+     cli protocol
+   ```
+   Useful for inspecting an existing local state tree from a
+   throwaway container.
+
+**Acceptance — Step 4.5 is done when:**
+
+- `cd offchain && docker compose -f feeder/docker-compose.yml --profile sqlite build`
+  succeeds and produces image `dia-cardano-feeder:local`.
+- `docker compose --profile sqlite up -d` brings the feeder up and
+  `curl localhost:8080/health/live` returns 2xx (no regression — fixes
+  the latent lib-bridge bug since CLI dist is now in the image).
+- `docker compose --profile cli run --rm cli protocol` runs the
+  CLI's `protocol` command against the mounted config and prints
+  protocol state without errors.
+- `docker compose --profile cli run --rm cli help` prints the full
+  command list.
+- The `feeder-artifacts` volume is shared: a file written by `make
+  cli CMD="protocol:init"` is visible to the daemon when it starts.
+- `offchain/feeder/README.md`, `offchain/cli/README.md`, and the root
+  `README.md` all reflect the unified-image model and the 9 use
+  cases above.
+- `make help` lists every target documented in the Makefile.
+- No `npm`/Node install is required on the host for any of the 9 use
+  cases above. The only host prereqs are Docker, `docker compose`,
+  `make`, and an editor for `.env`.
+
+**Ordering vs. other Steps:**
+
+- Step 4.5 depends on **Step 2** (metrics rename) and **Step 3**
+  (route rename) being merged first, so the Dockerfile and README
+  examples reference final names — no churn.
+- Step 4.5 must be merged before **Step 4** (monitoring profile)
+  because Step 4's `prometheus.yml` scrape target is the compose
+  service name `feeder-sqlite:8080`, which only stabilises once this
+  step has finalised service names.
+- Step 4.5 is independent of **Step 5** (batch tx) and **Step 6**
+  (confirmation_depth YAML).
+
+###### Step 5 — 3.4.5.i One Cardano tx per flush
+
+**Prerequisite verification — CONFIRMED (audit 2026-05-26):**
+
+`buildBatchOracleUpdateTx` at
+`offchain/cli/src/lib/transactions/build-batch-oracle-update.ts:66` already
+accepts mixed mint + update entries in one call:
+
+- Each `BatchUpdateEntry` carries an `isCreate: boolean` (lines 33–42).
+- The build loop at lines 201–209 emits `collectFrom` for entries with
+  `isCreate=false` (update redeemers).
+- The build loop at lines 221–226 emits `mintAssets` for entries with
+  `isCreate=true` (mint redeemers).
+- The output loop at lines 236–245 produces continuation outputs for all
+  entries regardless of role.
+
+No CLI changes are required. Proceed directly with the feeder integration.
+
+**Implementation status (2026-05-26):**
+
+- [x] Batch submit path implemented in `src/lib-bridge/index.ts`.
+- [x] `coalescer.ts` flushes N=1 through the single path and N>=2 through
+  the batch path.
+- [x] `queue.ts` and `queue-manager.ts` preserve batch ordering and keep one
+  lane per `(clientState, protocolState)`.
+- [x] `max_batch_size` and `size_fallback_enabled` are wired from YAML.
+- [x] Logging now includes batch-level transaction summaries and per-intent
+  batch membership metadata.
+- [x] Tests cover single, batch, mixed member actions, chunking, and
+  oversize split-and-retry.
+
+**Acceptance:** implemented in code and `npm test` passes. Preview evidence
+run remains part of Phase 4, not Step 5.
+
+###### Step 6 — 3.8 Rollbacks & finality
+
+**Implementation status (2026-05-26):**
+
+- [x] Source-chain `block_scanner.confirmations` is wired from YAML.
+- [x] Destination `cardano.confirmation_depth` is wired from YAML.
+- [x] `PriceCacheEntry` carries confirmation depth and the prices API exposes it.
+- [x] `TxDroppedFromChain` increments `dia_bridge_transactions_reorg_total`
+  in addition to the failed counter.
+- [x] Long wait helpers in `offchain/cli/src/core/chain-helpers.ts` perform
+  periodic `assertTxStillOnChain(...)` checks during extended waits.
+- [ ] Finality narrative still needs a dedicated README/API explanation.
+- [ ] Live verification of non-default depths remains pending for the
+  evidence run.
+
+##### 3.5.1 — Persistence — **DONE (audit 2026-05-26)**
+
+See "Step 1" in the Implementation contract above for the verification
+checklist. Both SQLite and Postgres drivers, all three tables
+(`processed_events`, `chain_state`, `transaction_log`), repos, and tests
+exist in `src/persistence/db.ts` (467 lines).
+
+##### 3.5.2 — HTTP API
+
+Endpoint shape aligned with `diadata-org/Spectra-interoperability/services/bridge`.
+
+- [x] `src/api/server.ts`: HTTP server (default `:8080`).
+- [x] `src/api/health.ts`:
+  - `GET /health` — liveness
+  - `GET /health/ready` — readiness: registry reachable + last submission age within budget
+  - `GET /health/live` — liveness alias
+- [x] `src/api/prices.ts`:
+  - `GET /api/v1/prices` — full price cache
+  - `GET /api/v1/prices/{symbol}` — single symbol lookup
+- [x] `src/api/symbols.ts`:
+  - `GET /api/v1/symbols` — list of tracked symbols
+  - `GET /api/v1/symbols/{symbol}/updates` — recent update history for a symbol
+- [x] `src/api/transactions.ts`:
+  - `GET /api/v1/transactions/{txHash}` — Cardano tx record from DB
+- [x] `src/api/chains.ts`:
+  - `GET /api/v1/chains` — DIA source chain status (last scanned block, lag)
+  - `GET /api/v1/chains/{id}/status` — single chain status
+- [x] Request instrumentation in `server.ts` emits HTTP counters and latency histograms.
+
+##### 3.5.3 — Prometheus metrics (`/metrics`)
+
+Implemented in `src/api/metrics.ts` using `prom-client`.
+
+**Metric naming: use `dia_bridge_*` prefix (same as Spectra).**
+Rationale: we ARE a bridge service (DIA Lasernet → Cardano). Using `dia_bridge_*`
+makes our metrics immediately recognisable to anyone familiar with Spectra and
+allows a single Prometheus instance to scrape both Spectra and our feeder with
+unified dashboards. The `destination_chain` constant label (see below)
+disambiguates our metrics from Spectra's without a different prefix.
+
+**Standard constant labels — set at registry level, appear on every metric:**
+
+```yaml
+destination_chain: "cardano"
+network: "preview" | "mainnet"   # from CARDANO_NETWORK env
+source_chain_id: "1050" | "10050"  # from YAML chains.yaml
+```
+
+These three labels are registered once on the `prom-client` default registry
+(not repeated on each metric definition). Every scraped series automatically
+carries them — zero overhead at call sites.
+
+**Gap analysis vs Spectra (`diadata-org/Spectra-interoperability/services/bridge`):**
+
+| Category | Spectra has | Our plan | Status |
+|---|---|---|---|
+| Intent lifecycle counters | `dia_bridge_intents_scanned_total{symbol,scanner_type}` etc. | vague list | Align names + add labels |
+| Tx counters | `bridge_transactions_submitted_total{chain}` | planned | Add `{symbol,error_code}` labels |
+| End-to-end latency | `bridge_end_to_end_latency_seconds{symbol}` | one histogram | Break into stages |
+| Chain/scanner health | `bridge_chain_connection_status`, `blockLag`, `lastBlockNumber` | none | Add |
+| Price deviation | `bridge_price_deviation_percent{symbol}` histogram | none | Add |
+| HTTP middleware | `bridge_http_requests_total{method,endpoint,status}` | none | Add |
+| Reorg/rollback counter | implicit in `tx_failed` | implicit | Add explicit counter |
+| Receiver balance | not applicable (EVM) | planned | Cardano-specific |
+| Pair staleness | not in Spectra | planned | Cardano-specific |
+| Per-intent-hash gauges | `bridge_intent_timestamp{intent_hash,symbol}` | — | **Skip** (high cardinality) |
+| Failover metrics | `bridge_failover_*` | — | **Not applicable** (no Hyperlane on Cardano) |
+
+**Metrics status** (all prefixed `dia_bridge_`, constant labels applied automatically):
+
+*Event pipeline counters:*
+
+- [x] `dia_bridge_events_detected_total{scanner_type}` — raw EVM logs seen
+- [x] `dia_bridge_events_duplicate_total` — dedup cache hits
+- [x] `dia_bridge_events_invalid_total{reason}` — events that failed parsing/validation
+- [x] `dia_bridge_intents_scanned_total{symbol, scanner_type}` — intents entering the pipeline
+- [x] `dia_bridge_intents_routed_total{symbol, router_id}` — intents accepted by a router
+- [x] `dia_bridge_intents_filtered_total{symbol, router_id, reason}` — intents dropped by policy
+  (`reason` values: `"price_deviation"`, `"time_threshold"`, `"expired"`, `"aged_out"`)
+
+*Cardano tx counters:*
+
+- [x] `dia_bridge_transactions_submitted_total{symbol, client_id}` — txs submitted on-chain
+- [x] `dia_bridge_transactions_confirmed_total{symbol, client_id}` — txs confirmed
+- [x] `dia_bridge_transactions_failed_total{symbol, client_id, error_code}` — txs failed
+  (`error_code` = `FeederErrorCode`: `WalletInsufficientFunds`, `NonMonotonicNonce`,
+  `TxDroppedFromChain`, `ProviderLag`, `ReceiverInsufficientFunds`, etc.)
+- [x] `dia_bridge_transactions_reorg_total{symbol, client_id}` — txs lost to Cardano rollback
+  (explicit counter, not buried in `failed_total`; incremented on `TxDroppedFromChain`)
+
+*Latency histograms — broken into pipeline stages:*
+
+- [x] `dia_bridge_scan_to_processing_seconds{symbol}` — EVM event detected → processing start
+- [x] `dia_bridge_processing_to_submission_seconds{symbol, client_id}` — processing → Cardano tx submitted
+- [x] `dia_bridge_submission_to_confirmation_seconds{symbol, client_id}` — submitted → confirmed on Cardano
+- [x] `dia_bridge_end_to_end_latency_seconds{symbol, client_id}` — EVM intent registration → Cardano confirmed
+
+*Price quality:*
+
+- [x] `dia_bridge_price_deviation_percent{symbol}` — histogram of `abs((new-old)/old)*100`
+  computed by router policy. Buckets: 0.01%, 0.1%, 0.5%, 1%, 5%, 10% (mirrors Spectra).
+- [x] `dia_bridge_price_age_seconds{symbol}` — age of the price inside the intent at processing time
+
+*Chain/scanner health:*
+
+- [x] `dia_bridge_scanner_last_block{chain_id, scanner_type}` — last processed EVM block (gauge)
+- [x] `dia_bridge_scanner_block_lag{chain_id}` — blocks behind chain tip (gauge)
+- [x] `dia_bridge_scanner_rpc_errors_total{chain_id, error_type}` — RPC call failures
+
+*Cardano-specific (no Spectra equivalent):*
+
+- [x] `dia_bridge_cardano_oracle_last_confirmed_timestamp_seconds{symbol, client_id}` —
+  last confirmed on-chain pair timestamp (gauge). Grafana alert:
+  `time() - metric > time_threshold * 2` → CRITICAL (pair stale).
+- [ ] `dia_bridge_cardano_receiver_balance_lovelace{client_id}` — receiver UTxO balance (gauge).
+  Polled after every confirmed tx. Alert when `< protocol_fee * 10`.
+- [ ] `dia_bridge_cardano_coordinator_balance_lovelace{client_id}` — coordinator UTxO balance (gauge).
+  Alert when low (settle needed).
+- [ ] `dia_bridge_cardano_receiver_topup_warnings_total{client_id}` — counter incremented on
+  every `ReceiverInsufficientFunds` error (surfaces trend before hard failure).
+- [x] `dia_bridge_cardano_pair_is_create{symbol, client_id}` — gauge (1=mint, 0=update) for
+  the last submitted tx. Alerts on unexpected re-mints.
+
+*HTTP middleware:*
+
+- [x] `dia_bridge_http_requests_total{method, endpoint, status}` — auto-instrumented
+- [x] `dia_bridge_http_request_duration_seconds{method, endpoint}` — request latency histogram
+
+**Acceptance**: `curl :8080/health`, `/health/ready`, `/metrics`, `/api/v1/prices`
 all respond; a feeder restart resumes from `chain_state.last_processed_block`;
 switching `DATABASE_DRIVER` between sqlite and postgres in
-`infrastructure.yaml` works without code changes.
+`infrastructure.yaml` works without code changes; Grafana staleness alert
+fires when a pair has not been updated for > `time_threshold * 2`.
 
-#### Phase 3.6 — Dockerization
+#### Phase 3.6 — Dockerization — **partially done**
 
-- [ ] Fill in multi-stage `Dockerfile`.
-- [ ] `docker-compose.yml` (dev) with two profiles: `sqlite` (no extra
-  service) and `postgres` (postgres-15 sidecar). Mount `config/`
-  read-only.
-- [ ] `README.md` with `cp .env.example .env`, `docker-compose --profile sqlite up`,
-  pointers to the operator runbook.
+**What exists today** (`offchain/feeder/`):
 
-**Acceptance**: `docker-compose --profile sqlite up` brings the feeder
-up; `--profile postgres up` brings it up with a Postgres sidecar; both
-serve `/healthz` on port 8080.
+- [x] `Dockerfile` — multi-stage (`node:22-alpine`): build stage compiles
+  TypeScript → JavaScript; runtime stage copies `dist/` + prod deps only.
+  Exposes port 8080. `HEALTHCHECK` on `/health/live` (30 s interval, 3 retries).
+  Entrypoint: `node dist/cmd/feeder/main.js --config /config`.
+  Config mounted read-only at `/config`; state at `/state`.
+- [x] `docker-compose.yml` — two profiles:
+  - `sqlite`: feeder only, state written to named volume `feeder-state-sqlite`.
+    `DATABASE_DRIVER=sqlite`. Health probe on `/health/live`.
+  - `postgres`: feeder + `postgres:15-alpine` sidecar. Feeder starts only
+    after postgres healthcheck passes. `DATABASE_DRIVER=postgres`.
+    `DATABASE_DSN_PREVIEW` / `DATABASE_DSN_MAINNET` from `.env`.
+
+**What is still pending:**
+
+- [ ] **Unified feeder + CLI image (Step 4.5).** The current Dockerfile
+  only builds the feeder package and does not include `offchain/cli/`.
+  This blocks operators from running CLI admin commands (bootstrap,
+  settle, pair lifecycle, treasury) in Docker, **and** leaves a latent
+  runtime bug: the feeder's `lib-bridge` dynamically imports CLI
+  modules from `../../../cli/src` at runtime, a path that does not
+  exist inside the current image. Step 4.5 (below) rewrites the
+  Dockerfile to build both packages, adds a `cli` compose service, a
+  shared `feeder-artifacts` volume, a top-level `Makefile`, and
+  updates all three READMEs.
+- [ ] `monitoring` docker-compose profile: add `prometheus` and `grafana`
+  services to `docker-compose.yml` under a `monitoring` profile.
+  - Prometheus: scrapes `host.docker.internal:8080/metrics` (or service
+    name if feeder is in same compose network). Ships a `prometheus.yml`
+    mounted read-only with scrape config.
+  - Grafana: pre-provisioned datasource (Prometheus) and one dashboard
+    JSON with panels: pair staleness gauge, receiver balance gauge,
+    tx confirmed/failed counters, end-to-end latency histogram.
+  - Alert rules:
+    - `time() - dia_bridge_cardano_oracle_last_confirmed_timestamp_seconds{symbol} > time_threshold * 2`
+      → CRITICAL (pair stale)
+    - `dia_bridge_cardano_receiver_balance_lovelace{client_id} < protocol_fee * 10`
+      → WARNING (receiver needs top-up)
+    - `dia_bridge_cardano_coordinator_balance_lovelace{client_id} < settle_threshold`
+      → WARNING (settle needed)
+- [ ] `README.md` for `offchain/feeder/`: `cp .env.example .env`,
+  `docker-compose --profile sqlite up`, `--profile postgres up`,
+  `--profile sqlite --profile monitoring up` (monitoring overlay).
+  Link to operator runbook.
+
+**Acceptance**: `docker-compose --profile sqlite up` already works (Dockerfile
+and compose exist). `--profile monitoring up` brings Prometheus + Grafana;
+staleness alert fires when a pair stalls; receiver balance alert fires when
+balance drops below threshold. Both profile combos serve `/health` on 8080.
+
+#### Phase 3.7 — Automatic settle tx (post-M2, design TBD)
+
+**Status: NOT designed.** The settle flow currently requires a manual
+CLI invocation (`npm run cli -- settle ...`). This phase will make the
+feeder trigger settle automatically under defined conditions.
+
+Open design questions (must be answered before implementation):
+
+- **When to trigger**: on a timer (e.g. every N hours)? When the
+  coordinator UTxO balance falls below a threshold? After a configurable
+  number of confirmed oracle-update txs? Or on an explicit operator signal
+  via API?
+- **Who triggers**: the feeder daemon itself (needs coordinator-spend
+  authority) or a separate sidecar process?
+- **Authorization**: settle requires a `config_admins` signer. Is the
+  feeder wallet the same as the admin wallet in production, or separate?
+  If separate, the feeder cannot sign settle txs without key access.
+- **Failure handling**: if settle fails (e.g. wallet drained), how does
+  the feeder surface this? As a `FeederErrorCode`? Via `/health/ready`?
+
+Planned items (subject to design resolution):
+
+- [ ] Define settle trigger policy in YAML:
+  `settle.mode: manual | timer | threshold | tx_count`.
+- [ ] Implement `src/lib-bridge/settle.ts`: `submitSettle(params)` wrapping
+  `buildSettleTx` from `offchain/cli/src/lib/transactions/build-settle.ts`.
+- [ ] Wire into daemon loop: check settle condition after each confirmed
+  oracle-update tx; submit settle if condition met.
+- [ ] Add metric `cardano_oracle_settle_triggered_total{client_id}` and
+  `cardano_oracle_coordinator_balance_lovelace{client_id}` gauge so
+  Grafana can alert on low coordinator balance before settle is needed.
+- [ ] Tests: settle trigger at threshold, settle failure surfaced on
+  `/health/ready`.
+
+**Acceptance**: feeder auto-triggers a settle tx when coordinator balance
+falls below the configured threshold; settle failure is surfaced in
+`/health/ready` and in the Prometheus metrics.
+
+#### Phase 3.9 — Batch settle CLI (post-M2, contract-ready)
+
+**Status: NOT implemented in CLI; contract support verified on-chain.**
+
+The Cardano contracts already allow a single settle tx to drain multiple
+Receiver UTxOs at once. Verified on-chain in the coordinator, receiver,
+and payment-hook validators. The core coordinator types are:
+
+```aiken
+pub type SettleReceiver { receiver_policy_id: PolicyId, receiver_asset_name: AssetName }
+pub type SettleManifest { receivers: List<SettleReceiver> }
+// CoordinatorRedeemer variant: ApplySettle(SettleManifest)
+```
+
+The current CLI `settle.ts` / `buildSettleTx` always produces a manifest
+with exactly one receiver entry. A batch variant would:
+
+1. Accept N `(clientStatePath, receiverUtxo)` pairs as CLI arguments.
+2. Build one `SettleManifest` listing all N receivers.
+3. Spend all N Receiver UTxOs and the single PaymentHook UTxO in the same tx.
+4. Persist updated state for each client after confirmation.
+
+**Why this matters operationally:** in a multi-client deployment every
+settle invocation today requires one tx per client. A batch tx reduces
+on-chain fees, reduces coordinator churn, and simplifies automation.
+
+**What must be decided before implementing:**
+
+- Same signer/authorization design questions as 3.7 (admin key, feeder
+  wallet, or separate key).
+- How to handle partial failure (one receiver stale, others valid).
+
+**Planned items (not yet scheduled):**
+
+- [ ] Extend `buildSettleTx` signature to accept a list of receiver/client
+  contexts; build the full `SettleManifest` with all entries.
+- [ ] Add `settle --all` flag (or `batch-settle`) to the CLI that
+  discovers all receivers under a given `protocolStatePath` and settles
+  them in one tx.
+- [ ] Update state files for all N clients after confirmation.
+- [ ] Add `--dry-run` to preview total lovelace before submitting.
+
+**Acceptance**: `dia-cli settle --all --protocol-state <path>` submits a
+single tx that drains all receivers to the PaymentHook and saves updated
+state for each client.
+
+#### Phase 3.8 — Rollbacks, finality, and consumer guarantees (M2-blocking)
+
+**Status: partially handled today; formal finality API is M2 work.**
+
+##### What "confirmed" means in our system today
+
+When the feeder emits a `tx_confirmed` event or updates `/api/v1/prices`,
+the Cardano tx has been **included in one block** and observed by at least
+one indexer (Blockfrost primary, Koios or Blockfrost REST as fallback).
+This is **probabilistically final but not cryptographically final**.
+
+##### Cardano finality model
+
+Cardano uses Ouroboros Praos. The security parameter is `k = 2160` blocks.
+With ~20 s/block, the theoretical maximum rollback window is:
+
+`k × 20 s = 43 200 s ≈ 12 hours`
+
+In practice, rollbacks deeper than 1–2 blocks are essentially unobserved on
+mainnet. The risk curve is:
+
+| Confirmation depth | Practical rollback probability |
+| --- | --- |
+| 1 block (~20 s) | Very low (< 0.1% on mainnet) |
+| 3 blocks (~1 min) | Negligible |
+| 20 blocks (~7 min) | Near-zero |
+| 2 160 blocks (~12 h) | Cryptographically impossible |
+
+For a price oracle feed, 1-block confirmation is practically sufficient.
+Consumer applications that need absolute guarantees (e.g. DeFi settlement)
+should wait for their own depth threshold.
+
+##### What we already handle — `TxDroppedFromChainError`
+
+Already implemented in `offchain/cli/src/core/tx-onchain-check.ts`:
+
+- After a tx confirms, the UTxO-wait phase polls every ~90 s via **both**
+  Blockfrost and Koios independently.
+- Only when **both providers** report the tx absent → `TxDroppedFromChainError`
+  is thrown. This dual-provider consensus avoids false positives from
+  transient indexer lag.
+- `classifyError` maps it to `FeederErrorCode = "TxDroppedFromChain"`.
+- The feeder logs the reorg, increments `dia_bridge_transactions_reorg_total`,
+  and re-queues the intent on the next incoming source event.
+
+##### Source chain (DIA Lasernet) rollback tolerance
+
+The EVM scanner already trails the chain tip by `confirmations = 6` blocks
+(currently hardcoded in `scanner-http.ts` — promoted to YAML as part of this
+phase). Events from blocks within the trailing window are never checkpointed,
+so a reorg within those 6 blocks causes the affected range to be re-scanned
+automatically. The dedup cache (4 096 entries, 1-hour TTL) prevents
+re-submitting the same intent twice.
+
+##### How Spectra handles EVM finality
+
+On EVM destination chains, Spectra configures a per-chain `confirmations`
+count (number of blocks to wait before treating a tx as settled). It does NOT
+follow chain-specific finality semantics (e.g. Ethereum's 2-epoch PoS finality
+or Avalanche's sub-second finality) — it uses a fixed block count as a safe
+approximation. Our equivalent for the Cardano destination is the
+`cardano_confirmation_depth` setting in `infrastructure.<network>.yaml`
+(default 1, configurable per deployment).
+
+##### M2 work items (all values from YAML or env, never hardcoded)
+
+- [x] Expose confirmation depth in `/api/v1/prices` response so consumers
+  know at which block depth the price was declared confirmed. Field is populated
+  from the same value used by the destination confirmation depth (next item),
+  so consumers can correlate "what we waited for" with "what we report".
+- [x] Make source-chain `confirmations` configurable via YAML
+  (`block_scanner.confirmations`) in `infrastructure.<network>.yaml`. Currently
+  hardcoded to `6n` in `scanner-http.ts`. The Zod loader must validate the
+  field, the consumer in `scanner-http.ts` must read it, and
+  `offchain/feeder/README.md` must document it (default value, valid range,
+  what it means for reorg tolerance).
+- [x] Add `cardano_confirmation_depth` setting for the destination chain in
+  `infrastructure.<network>.yaml` (suggested location: under a new
+  `cardano` block, sibling to `block_scanner`). Default value: **`1`**
+  (preserves current behaviour for the M2 evidence run). The code that consumes
+  it (`tx-confirmation.ts` or the bridge wrapper) must include a docstring
+  explaining: "Number of blocks the feeder waits past inclusion before
+  declaring `tx_confirmed`. Default 1 — practically final for oracle feeds.
+  Operators needing stricter guarantees set it higher (3–5 for DeFi
+  settlement, etc.). See README and Phase 3.8 for the finality discussion."
+- [x] Document finality model in `offchain/feeder/README.md` (2026-05-26):
+  what `confirmedAtDepth` means, Ouroboros Praos k=2160 model, reorg
+  handling. The `/api/v1/prices` response already carries `confirmedAtDepth`.
+- [x] `dia_bridge_transactions_reorg_total{symbol, client_id}` counter (see
+  metrics section) — already planned; make sure it is distinct from
+  `transactions_failed_total` so Grafana can alert on reorg rate separately.
 
 #### Phase 3 acceptance (rolled up)
 

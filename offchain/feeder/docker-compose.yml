@@ -1,26 +1,25 @@
-# DIA Cardano Oracle Feeder — docker-compose dev setup.
+# DIA Cardano Oracle — unified feeder + CLI compose.
 #
-# Two profiles:
+# Build context is the parent offchain/ directory so both packages are visible.
+# Profiles:
 #
-#   sqlite   (default) — feeder only; state written to ./state/<network>/
-#   postgres           — feeder + postgres-15 sidecar
+#   sqlite      — feeder daemon, SQLite persistence
+#   postgres    — feeder daemon, PostgreSQL persistence
+#   cli         — on-demand CLI admin container (short-lived)
+#   monitoring  — Prometheus + Grafana stack
 #
-# Usage:
-#   docker-compose --profile sqlite   up
-#   docker-compose --profile postgres up
-#
-# Both profiles expect:
-#   - ./config/              — modular YAML config directory (read-only mount)
-#   - .env                   — secrets and selectors (see .env.example)
-
-version: "3.9"
+# Common usage:
+#   docker compose --profile sqlite up -d
+#   docker compose --profile sqlite --profile monitoring up -d
+#   docker compose --profile cli run --rm cli protocol
+#   make help  (from offchain/)
 
 services:
   feeder-sqlite:
     profiles: ["sqlite"]
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: feeder/Dockerfile
       target: runtime
     image: dia-cardano-feeder:local
     restart: unless-stopped
@@ -29,14 +28,15 @@ services:
     volumes:
       - ./config:/config:ro
       - feeder-state-sqlite:/state
-    env_file:
-      - .env
+      - feeder-artifacts:/artifacts
+    env_file: [.env]
     environment:
       DATABASE_DRIVER: sqlite
       DATABASE_PATH_PREVIEW: /state/preview/feeder.sqlite
       DATABASE_PATH_MAINNET: /state/mainnet/feeder.sqlite
+      # CARDANO_FEEDER_CLI_DIST_ROOT already set by Dockerfile ENV.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -45,8 +45,8 @@ services:
   feeder-postgres:
     profiles: ["postgres"]
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: feeder/Dockerfile
       target: runtime
     image: dia-cardano-feeder:local
     restart: unless-stopped
@@ -54,8 +54,8 @@ services:
       - "8080:8080"
     volumes:
       - ./config:/config:ro
-    env_file:
-      - .env
+      - feeder-artifacts:/artifacts
+    env_file: [.env]
     environment:
       DATABASE_DRIVER: postgres
       # DATABASE_DSN_PREVIEW and DATABASE_DSN_MAINNET come from .env
@@ -63,7 +63,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -85,6 +85,84 @@ services:
       timeout: 5s
       retries: 5
 
+  # Short-lived on-demand CLI container. Invoke via:
+  #   docker compose --profile cli run --rm cli <command>
+  #   make cli CMD="<command>"
+  cli:
+    profiles: ["cli"]
+    build:
+      context: ..
+      dockerfile: feeder/Dockerfile
+      target: runtime
+    image: dia-cardano-feeder:local
+    entrypoint: ["dia-cli"]
+    command: ["help"]
+    volumes:
+      - ./config:/config:ro
+      - feeder-artifacts:/artifacts
+      - feeder-state-sqlite:/state
+    env_file: [.env]
+    stdin_open: true
+    tty: true
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v2.51.0
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:10.4.2
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Headless renderer used by the M2 evidence packaging script to
+      # snapshot the dashboard as PNG. Points at the renderer sidecar
+      # service below (only active under the `monitoring` profile).
+      GF_RENDERING_SERVER_URL: "http://renderer:8081/render"
+      GF_RENDERING_CALLBACK_URL: "http://grafana:3000/"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  renderer:
+    profiles: ["monitoring"]
+    image: grafana/grafana-image-renderer:3.10.6
+    restart: unless-stopped
+    environment:
+      ENABLE_METRICS: "true"
+
 volumes:
   feeder-state-sqlite:
+  feeder-artifacts:
   postgres-data:
+  prometheus-data:
+  grafana-data:

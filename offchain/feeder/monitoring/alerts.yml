@@ -1,0 +1,146 @@
+# Prometheus alerting rules for the DIA Cardano Oracle feeder.
+#
+# Threshold authority: every numeric value in the `expr` lines below
+# MUST mirror the canonical YAML key in
+# `infrastructure.<network>.yaml::alerting.<key>` — the comment above
+# each rule names that key. Drift between this file and the YAML is a
+# bug; the README "Thresholds and alerts" section is the operator-facing
+# reference table.
+#
+# Units convention (matches the YAML):
+#   *_lovelace = lovelace (1 ADA = 1_000_000 lovelace)
+#   *_seconds  = seconds
+#   *_percent  = percent (0–100)
+
+groups:
+  - name: feeder
+    rules:
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.oracle_pair_stale_seconds
+      - alert: OraclePairStale
+        expr: >
+          (time() - dia_bridge_cardano_oracle_last_confirmed_timestamp_seconds) > 3600
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle pair {{ $labels.symbol }} is stale"
+          description: >
+            Pair {{ $labels.symbol }} has not been confirmed on-chain for
+            {{ $value | humanizeDuration }}. Threshold mirrors
+            `alerting.oracle_pair_stale_seconds` in the network YAML.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.receiver_balance_low_lovelace
+      - alert: ReceiverBalanceLow
+        expr: >
+          dia_bridge_cardano_receiver_balance_lovelace < 2000000000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Receiver balance low for client {{ $labels.client_id }}"
+          description: >
+            Receiver wallet balance is {{ $value | humanize }} lovelace
+            (threshold: 2 000 000 000 lovelace = 2 ADA, mirroring
+            `alerting.receiver_balance_low_lovelace`). Operator action:
+            `dia-cli receiver:top-up --amount-lovelace 5000000000`. The
+            feeder also increments `dia_bridge_cardano_receiver_topup_warnings_total`.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.settle_overdue_lovelace
+      - alert: SettleOverdue
+        expr: >
+          dia_bridge_cardano_receiver_accrued_lovelace > 10000000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Settle overdue for client {{ $labels.client_id }}"
+          description: >
+            Receiver has {{ $value | humanize }} lovelace accrued and not
+            yet settled to the PaymentHook (threshold: 10 000 000 lovelace
+            = 10 ADA, mirroring `alerting.settle_overdue_lovelace`).
+            Operator action: `dia-cli settle`.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.payment_hook_withdraw_ready_lovelace
+      - alert: PaymentHookWithdrawReady
+        expr: >
+          dia_bridge_cardano_payment_hook_accrued_lovelace > 50000000
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "PaymentHook ready for withdrawal"
+          description: >
+            PaymentHook holds {{ $value | humanize }} lovelace of fees
+            (threshold: 50 000 000 lovelace = 50 ADA, mirroring
+            `alerting.payment_hook_withdraw_ready_lovelace`).
+            DIA admin can run `dia-cli payment-hook:withdraw`.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.admin_wallet_low_lovelace
+      - alert: AdminWalletLow
+        expr: >
+          dia_bridge_cardano_admin_wallet_lovelace < 5000000000
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Admin (signer) wallet running low"
+          description: >
+            Admin wallet balance is {{ $value | humanize }} lovelace
+            (threshold: 5 000 000 000 lovelace = 5 ADA, mirroring
+            `alerting.admin_wallet_low_lovelace`). Without ADA the feeder
+            cannot pay tx fees and oracle updates stall. Refill the
+            operator wallet immediately.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.price_deviation_high_percent
+      - alert: PriceDeviationHigh
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le, symbol) (
+              rate(dia_bridge_price_deviation_percent_bucket[10m])
+            )
+          ) > 5
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High price deviation for {{ $labels.symbol }}"
+          description: >
+            The p95 price deviation for {{ $labels.symbol }} is
+            {{ $value | printf "%.2f" }}% over the last 10 minutes
+            (threshold mirrors `alerting.price_deviation_high_percent`).
+            May indicate a misreported price or a stale/outlier source feed.
+
+      # Canonical threshold: infrastructure.<network>.yaml::alerting.price_age_high_seconds
+      - alert: PriceAgeHigh
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le, symbol) (
+              rate(dia_bridge_price_age_seconds_bucket[10m])
+            )
+          ) > 600
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale price data for {{ $labels.symbol }}"
+          description: >
+            The p95 age of incoming DIA price data for {{ $labels.symbol }}
+            is {{ $value | humanizeDuration }} (threshold mirrors
+            `alerting.price_age_high_seconds`). The DIA source may be
+            publishing outdated prices.
+
+      # Reorg rate alert. Not strictly a YAML threshold — set here based on
+      # an operational tolerance of <3 dropped txs per hour.
+      - alert: ReorgRateHigh
+        expr: >
+          increase(dia_bridge_transactions_reorg_total[1h]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cardano reorgs dropping confirmed txs for {{ $labels.symbol }}"
+          description: >
+            {{ $value }} transactions for {{ $labels.symbol }} (client
+            {{ $labels.client_id }}) were dropped by chain reorganisation
+            in the last hour. Investigate provider lag and check the
+            scanner block-lag panel.
