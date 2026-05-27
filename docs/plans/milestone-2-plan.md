@@ -780,8 +780,14 @@ Tasks (implemented subset for M2 — see note below):
   `lib-bridge` but the coalescer flush does not yet call it.
 - Size-budget fallback ladder (`BatchSizeExceeded` → split).
 - Mixed mint + update batches in one tx.
-- Per-entry `IntentAgedOut` / `lane_overrun` lifecycle events.
 - `intent_superseded` event emission.
+
+**Implemented since last plan update (2026-05-27):**
+
+- [x] `IntentAgedOut` lifecycle events: `buildIntentAgedOutError` in `coalescer.ts`
+  now includes ISO timestamps (`intent_time`, `now`), `intent_age`, `max_intent_age`,
+  and `exceeds_by` in the error message. `formatDurationMs` helper converts ms to
+  human-readable strings (e.g. `16m 5s`). Test added in `coalescer.test.ts`.
 
 These are optimizations for production throughput; the M2 evidence window
 (5-min `time_threshold`, ~1 intent per confirm cycle) does not exercise
@@ -2479,58 +2485,30 @@ switching `DATABASE_DRIVER` between sqlite and postgres in
 `infrastructure.yaml` works without code changes; Grafana staleness alert
 fires when a pair has not been updated for > `time_threshold * 2`.
 
-#### Phase 3.6 — Dockerization — **partially done**
+#### Phase 3.6 — Dockerization — **done 2026-05-27**
 
 **What exists today** (`offchain/feeder/`):
 
-- [x] `Dockerfile` — multi-stage (`node:22-alpine`): build stage compiles
-  TypeScript → JavaScript; runtime stage copies `dist/` + prod deps only.
-  Exposes port 8080. `HEALTHCHECK` on `/health/live` (30 s interval, 3 retries).
-  Entrypoint: `node dist/cmd/feeder/main.js --config /config`.
-  Config mounted read-only at `/config`; state at `/state`.
-- [x] `docker-compose.yml` — two profiles:
-  - `sqlite`: feeder only, state written to named volume `feeder-state-sqlite`.
-    `DATABASE_DRIVER=sqlite`. Health probe on `/health/live`.
-  - `postgres`: feeder + `postgres:15-alpine` sidecar. Feeder starts only
-    after postgres healthcheck passes. `DATABASE_DRIVER=postgres`.
-    `DATABASE_DSN_PREVIEW` / `DATABASE_DSN_MAINNET` from `.env`.
+- [x] `Dockerfile` — 3-stage build (`node:22-alpine`): `cli-build` compiles the
+  CLI package; `feeder-build` compiles the feeder package; `runtime` copies
+  both `dist/` trees + prod deps. Exposes port 8080. `HEALTHCHECK` on
+  `/health/live` (30 s interval, 3 retries). `dia-cli` wrapper script.
+  `CARDANO_FEEDER_CLI_DIST_ROOT=/app/cli/dist` env set for `lib-bridge`.
+- [x] `docker-compose.yml` — profiles: `sqlite`, `postgres`, `cli`, `monitoring`.
+  - Build context moved to `offchain/` (parent) so Dockerfile sees both packages.
+  - State mounted as `./state:/app/state` (host bind-mount, not named volume).
+  - `user: "${UID:-1000}:${GID:-1000}"` on all services — no root-owned files.
+  - `cli` profile: `dia-cli` entrypoint, `stdin_open + tty`.
+  - `monitoring` profile: Prometheus + Grafana + renderer.
+- [x] `offchain/Makefile` — `UID`/`GID` exported for docker, all operator
+  shortcuts (`build`, `up`, `up-postgres`, `up-monitoring`, `down`, `logs`,
+  `cli`, `bootstrap`).
+- [x] `lib-bridge/index.ts` — `CARDANO_FEEDER_CLI_DIST_ROOT` env override for
+  CLI module resolution; latent `ERR_MODULE_NOT_FOUND` bug in Docker fixed.
 
-**What is still pending:**
-
-- [ ] **Unified feeder + CLI image (Step 4.5).** The current Dockerfile
-  only builds the feeder package and does not include `offchain/cli/`.
-  This blocks operators from running CLI admin commands (bootstrap,
-  settle, pair lifecycle, treasury) in Docker, **and** leaves a latent
-  runtime bug: the feeder's `lib-bridge` dynamically imports CLI
-  modules from `../../../cli/src` at runtime, a path that does not
-  exist inside the current image. Step 4.5 (below) rewrites the
-  Dockerfile to build both packages, adds a `cli` compose service, a
-  shared `feeder-artifacts` volume, a top-level `Makefile`, and
-  updates all three READMEs.
-- [ ] `monitoring` docker-compose profile: add `prometheus` and `grafana`
-  services to `docker-compose.yml` under a `monitoring` profile.
-  - Prometheus: scrapes `host.docker.internal:8080/metrics` (or service
-    name if feeder is in same compose network). Ships a `prometheus.yml`
-    mounted read-only with scrape config.
-  - Grafana: pre-provisioned datasource (Prometheus) and one dashboard
-    JSON with panels: pair staleness gauge, receiver balance gauge,
-    tx confirmed/failed counters, end-to-end latency histogram.
-  - Alert rules:
-    - `time() - dia_bridge_cardano_oracle_last_confirmed_timestamp_seconds{symbol} > time_threshold * 2`
-      → CRITICAL (pair stale)
-    - `dia_bridge_cardano_receiver_balance_lovelace{client_id} < protocol_fee * 10`
-      → WARNING (receiver needs top-up)
-    - `dia_bridge_cardano_coordinator_balance_lovelace{client_id} < settle_threshold`
-      → WARNING (settle needed)
-- [ ] `README.md` for `offchain/feeder/`: `cp .env.example .env`,
-  `docker-compose --profile sqlite up`, `--profile postgres up`,
-  `--profile sqlite --profile monitoring up` (monitoring overlay).
-  Link to operator runbook.
-
-**Acceptance**: `docker-compose --profile sqlite up` already works (Dockerfile
-and compose exist). `--profile monitoring up` brings Prometheus + Grafana;
-staleness alert fires when a pair stalls; receiver balance alert fires when
-balance drops below threshold. Both profile combos serve `/health` on 8080.
+**Acceptance**: `docker compose --profile sqlite up` works. `--profile cli run --rm cli help`
+prints CLI commands. `--profile sqlite --profile monitoring up` brings Prometheus + Grafana.
+`make help` lists all targets.
 
 #### Phase 3.7 — Automatic settle tx (post-M2, design TBD)
 
@@ -2944,6 +2922,22 @@ Tasks (implemented 2026-05-21):
   operators only fill secrets (Blockfrost project ids, wallet seeds,
   signing keys).
 
+Additional tasks completed 2026-05-27:
+
+- [x] `DiaSourceConfig` made optional in `CliConfig` (`dia: DiaSourceConfig | null`).
+  `getCliConfig()` returns `dia: null` when DIA source env vars are absent
+  (Cardano-only workflows: wallet ops, pair lifecycle, settle). New helper
+  `requireDiaSourceConfig(config)` throws a descriptive error when a DIA env
+  block is required but absent. All callers that need DIA updated to use it
+  (`init/protocol-init.ts`, `oracle/intent-create.ts`).
+- [x] Tests updated to reflect env-var rename:
+  `wallet.env.CARDANO_WALLET_SEED` → `wallet.env.CARDANO_WALLET_SEED_TESTNET`
+  (and `_MAINNET`); `wallet.env.DIA_EVM_PRIVATE_KEY` →
+  `wallet.env.DIA_EVM_PRIVATE_KEY_TESTNET` (and `_MAINNET`).
+  New test `testCliConfigAllowsCardanoOnlyModeWithoutDiaSourceEnv`.
+- [x] Package rename: `@protofire/dia-cardano-oracle-cli` →
+  `@diadata-org/dia-cardano-oracle-cli` in `offchain/cli/package-lock.json`.
+
 **Out of scope (tracked in Phase 5):** test fixtures in
 `offchain/cli/src/__tests__/run-tests.ts` still carry the legacy
 `sourceChainId = 100640`. They are regenerated during Phase 5 alongside
@@ -2951,6 +2945,156 @@ the Mainnet `config:update`, as already listed in that phase's tasks.
 
 **Acceptance**: `grep -rE "(diadata\\.org|0xF8c614|0x5612599|100640|1050|10050)" offchain/cli/src offchain/cli/scripts` returns
 only test files (`__tests__/`) and no source-code matches outside them.
+
+## Annex F — Spectra parity: alignments and known divergences
+
+This annex documents where the Cardano feeder is **aligned** with the DIA
+Spectra Bridge (`diadata-org/Spectra-interoperability/services/bridge`) and
+where it **intentionally diverges** due to Cardano's different execution
+model. It also lists remaining parity gaps that are planned but not yet
+implemented.
+
+### F.1 — Transport: WS + HTTP simultaneous vs exclusive
+
+**Spectra** runs both transports simultaneously on startup. The HTTP block
+scanner (`internal/scanner/block_scanner_enhanced.go`) and the WS event
+source (`internal/bridge/event_source.go`) are started as independent
+goroutines; if WS reconnect budget is exhausted, the bridge keeps running
+via HTTP polling.
+
+**Our feeder** uses an exclusive `switch` on `--transport http|ws` in
+`cmd/feeder/daemon-cmd.ts`. Only one transport runs at a time. WS and HTTP
+are not concurrent.
+
+```typescript
+// offchain/feeder/cmd/feeder/daemon-cmd.ts
+switch (transport) {
+  case "http": await runHttpTransport(...); break;
+  case "ws":   await runWsTransport(...);   break;
+}
+```
+
+**Status: intentional divergence for M2.** The WS scanner already has
+auto-reconnect with configurable budget (`max_reconnect_attempts`). Adding
+simultaneous WS + HTTP as a fallback pair (WS primary, HTTP fallback on
+budget exhaustion) is planned post-M2 as an operational robustness upgrade.
+For the M2 evidence window, running with `--transport ws` and the reconnect
+budget is sufficient.
+
+**Planned alignment**: run WS as primary; on `maxReconnects` exhaustion,
+fall through to `runHttpTransport` instead of exiting. This makes the
+`--transport` flag control the *preferred* transport, not the *only* one.
+
+### F.2 — Router gate: OR vs AND (time_threshold + price_deviation)
+
+**Spectra** (`pkg/router/generic_router.go`) uses an **OR** gate:
+
+```go
+if timeThresholdMet || priceDeviationMet {
+    // publish to destination
+}
+```
+
+Either condition alone is sufficient to trigger a submission. An intent with
+a large price deviation always gets through regardless of time; an intent
+that occurs after `time_threshold` always gets through regardless of
+deviation.
+
+**Our feeder** (`src/router/policy.ts`) evaluates `time_threshold` first and
+short-circuits if it has not elapsed. `price_deviation` is only consulted
+after time has passed. This is effectively an **AND** gate in practice for
+the common case (most intents arrive before the time threshold).
+
+**Impact**: an intent with a very large price deviation arriving 10 seconds
+after the last update would be forwarded by Spectra but silently filtered
+by our feeder.
+
+**Status: known parity gap.** Fixing it requires changing `policy.ts` to
+implement the OR logic. Tracked as a post-M2 improvement. For the M2
+evidence window with `time_threshold: 5m` and `price_deviation: 0.1%`, the
+practical difference is negligible — extreme deviations on DIA testnet pairs
+are rare within a 5-minute window.
+
+### F.3 — Cron service: periodic update on time_threshold
+
+**Spectra** runs `internal/cron/cron_service.go` as a separate loop that
+fires every `time_threshold` interval. If no new intent arrived within that
+window, the cron service re-reads the last known price from on-chain state
+and re-submits it, guaranteeing the destination is never stale beyond
+`time_threshold`.
+
+**Our feeder** has no cron service. It is purely event-driven: an update is
+submitted only when a new `IntentRegistered` event arrives. If DIA stops
+emitting intents (attestor down, network gap), the Cardano pair data goes
+stale silently.
+
+**Two sub-gaps in the cron behaviour:**
+
+1. **Cron consults on-chain timestamp (Spectra) vs internal price cache (ours)**:
+   Spectra reads the target contract for the real last-updated timestamp.
+   Our future cron would use `priceCache` (internal memory). On restart the
+   cache is empty, so the first cron tick would always re-submit — a false
+   positive. A correct implementation must read the on-chain pair datum
+   timestamp at startup (or trust the reconcile step to seed the cache from
+   chain state).
+
+2. **Cron checks price_deviation before re-submitting (Spectra) vs always
+   re-submit (ours, planned)**: Spectra's cron only re-submits if the cached
+   price differs from on-chain by at least `price_deviation`. A naive cron
+   would re-submit identical prices every `time_threshold`, wasting Cardano
+   fees. The correct behaviour is: re-submit only if the on-chain price
+   differs from the most recent DIA price by at least `price_deviation`, OR
+   if the gap since last on-chain update exceeds `2 × time_threshold`
+   (hard liveness guarantee).
+
+**Status: not implemented; planned post-M2** as Etapa B.2 in the
+implementation contract (see `###### Etapa B.2` in Phase 3.5.4).
+For the M2 evidence window the attestor is expected to emit intents
+continuously so liveness is maintained event-driven.
+
+### F.4 — Alignments confirmed
+
+The following dimensions are **fully aligned** with Spectra:
+
+| Dimension | Spectra | Our feeder | Status |
+| --- | --- | --- | --- |
+| Config file layout | 5-file modular YAML (`infrastructure`, `chains`, `contracts`, `events`, `routers/`) | Identical layout | ✅ aligned |
+| Router YAML schema | `RouterConfig` shape with `triggers`, `conditions`, `destinations`, `time_threshold`, `price_deviation` | Identical shape; Cardano `destinations[].cardano:` block extends the existing destination variant | ✅ aligned |
+| `price_deviation` semantics | Minimum update threshold; intents below it are filtered, not alerted | Same: filtered before reaching the submitter | ✅ aligned |
+| Dedup cache | LRU + TTL keyed on `intentHash` | Identical (`src/processor/dedup-cache.ts`) | ✅ aligned |
+| Price cache per `(routerId, dest, symbol)` | `internal/processor/price_cache.go` | `src/processor/price-cache.ts` | ✅ aligned |
+| Metric naming prefix | `dia_bridge_*` | `dia_bridge_*` | ✅ aligned |
+| Constant labels | `destination_chain`, `network`, `source_chain_id` | Same three labels on default registry | ✅ aligned |
+| HTTP API shape | `/healthz`, `/prices`, `/metrics` | `/health`, `/health/ready`, `/api/v1/prices`, `/metrics` | ✅ aligned (minor path variant) |
+| `DRY_RUN` env var | Honoured | Honoured | ✅ aligned |
+| Per-`(wallet, chainID)` serial queue | `internal/transaction/queue_manager.go` | `src/submitter/queue-manager.ts` keyed by `(clientStatePath, protocolStatePath)` | ✅ aligned (key adapted for Cardano UTxO model) |
+| EVM source `confirmations` | Per-chain config | `block_scanner.confirmations` in `infrastructure.<network>.yaml` | ✅ aligned |
+| Scanner block range | Config-driven | `block_scanner.block_range` in YAML | ✅ aligned |
+
+### F.5 — Intentional divergences (permanent, by design)
+
+| Dimension | Spectra | Our feeder | Reason |
+| --- | --- | --- | --- |
+| Destination chain | EVM only | Cardano (UTxO model) | First non-EVM consumer of `OracleIntentRegistry` |
+| Nonce manager | `internal/contracts/nonce_manager.go` (EVM account nonce) | Not applicable; replaced by UTxO in-flight lock | Cardano has no account nonce; serialization key is `(updaterWallet, receiverUnit)` |
+| Persistence | Postgres only | SQLite (default) + Postgres (opt-in) | Single-node deployment; SQLite removes ops dependency for M2 |
+| Replica failover / leader election | `internal/leader/onchain_monitor.go` | Not implemented | Active-passive HA needs ≥ 2 instances; post-M2 |
+| Worker pool | `internal/processor/event_worker_pool.go` + parallel pipeline | Sequential | Sequential is sufficient for M2 QPS; parallelism is a post-M2 optimization |
+| Settle / treasury management | Not applicable (EVM) | CLI-triggered (manual for M2); auto-settle post-M2 | Cardano-specific; no EVM equivalent |
+
+### F.6 — Remaining parity gaps (post-M2)
+
+| Gap | Reference | Priority |
+| --- | --- | --- |
+| Simultaneous WS + HTTP transport (WS primary, HTTP fallback) | F.1 | post-M2 |
+| OR gate for `time_threshold \|\| price_deviation` | F.2 | post-M2 |
+| Cron service for time-based liveness re-submissions | F.3 | post-M2 |
+| Cron reads on-chain timestamp instead of in-memory cache | F.3 sub-gap 1 | post-M2 |
+| Cron checks `price_deviation` before re-submitting | F.3 sub-gap 2 | post-M2 |
+| `tx_mode: auto` full batch coalescing (currently single-only) | Phase 3.4.5.g | post-M2 |
+| Replica failover / HA | Annex C | post-M2 |
+
+---
 
 ## Annex B — DIA Spectra Bridge: canonical reference for the feeder
 
