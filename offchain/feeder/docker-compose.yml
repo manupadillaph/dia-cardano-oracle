@@ -22,18 +22,18 @@ services:
       dockerfile: feeder/Dockerfile
       target: runtime
     image: dia-cardano-feeder:local
+    user: "${UID:-1000}:${GID:-1000}"
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       - ./config:/config:ro
-      - feeder-state-sqlite:/state
-      - feeder-artifacts:/artifacts
+      - ./state:/app/state
     env_file: [.env]
     environment:
       DATABASE_DRIVER: sqlite
-      DATABASE_PATH_PREVIEW: /state/preview/feeder.sqlite
-      DATABASE_PATH_MAINNET: /state/mainnet/feeder.sqlite
+      DATABASE_PATH_PREVIEW: /app/state/preview/feeder.sqlite
+      DATABASE_PATH_MAINNET: /app/state/mainnet/feeder.sqlite
       # CARDANO_FEEDER_CLI_DIST_ROOT already set by Dockerfile ENV.
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health/live"]
@@ -49,12 +49,13 @@ services:
       dockerfile: feeder/Dockerfile
       target: runtime
     image: dia-cardano-feeder:local
+    user: "${UID:-1000}:${GID:-1000}"
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
       - ./config:/config:ro
-      - feeder-artifacts:/artifacts
+      - ./state:/app/state
     env_file: [.env]
     environment:
       DATABASE_DRIVER: postgres
@@ -95,12 +96,12 @@ services:
       dockerfile: feeder/Dockerfile
       target: runtime
     image: dia-cardano-feeder:local
+    user: "${UID:-1000}:${GID:-1000}"
     entrypoint: ["dia-cli"]
     command: ["help"]
     volumes:
       - ./config:/config:ro
-      - feeder-artifacts:/artifacts
-      - feeder-state-sqlite:/state
+      - ./state:/app/state
     env_file: [.env]
     stdin_open: true
     tty: true
@@ -155,14 +156,12 @@ services:
 
   renderer:
     profiles: ["monitoring"]
-    image: grafana/grafana-image-renderer:3.10.6
+    image: grafana/grafana-image-renderer:3.10.5
     restart: unless-stopped
     environment:
       ENABLE_METRICS: "true"
 
 volumes:
-  feeder-state-sqlite:
-  feeder-artifacts:
   postgres-data:
   prometheus-data:
   grafana-data:

@@ -27,7 +27,9 @@ WORKDIR /build/feeder
 RUN apk add --no-cache python3 make g++
 
 COPY feeder/package.json feeder/package-lock.json* ./
-RUN npm ci --ignore-scripts
+# better-sqlite3 needs its install script so the native binding exists in
+# the final Alpine runtime image.
+RUN npm ci
 
 COPY feeder/tsconfig.json ./
 COPY feeder/cmd ./cmd
@@ -42,12 +44,12 @@ RUN npm prune --omit=dev
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-# Feeder artefacts.
+# Feeder build output.
 COPY --from=feeder-build /build/feeder/package.json /app/feeder/package.json
 COPY --from=feeder-build /build/feeder/node_modules /app/feeder/node_modules
 COPY --from=feeder-build /build/feeder/dist /app/feeder/dist
 
-# CLI artefacts.
+# CLI build output.
 COPY --from=cli-build /build/cli/package.json /app/cli/package.json
 COPY --from=cli-build /build/cli/node_modules /app/cli/node_modules
 COPY --from=cli-build /build/cli/dist /app/cli/dist
@@ -56,9 +58,10 @@ COPY --from=cli-build /build/cli/dist /app/cli/dist
 RUN printf '#!/bin/sh\nexec node /app/cli/dist/index.js "$@"\n' > /usr/local/bin/dia-cli \
     && chmod +x /usr/local/bin/dia-cli
 
-# Mount points for config and on-chain artefacts (see volume layout in README).
-RUN mkdir -p /config /state /artifacts \
-    && chown -R node:node /config /state /artifacts
+# Mount points for config and the shared state tree used by both the
+# feeder and the CLI inside the container.
+RUN mkdir -p /config /app/state \
+    && chown -R node:node /config /app/state
 
 EXPOSE 8080
 

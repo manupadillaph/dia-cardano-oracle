@@ -22,6 +22,9 @@ because it bundles the compiled feeder, compiled CLI, and all native deps
 
 All `make` targets below run from `offchain/` (where `Makefile` lives).
 Run `make help` for a complete target list.
+The Makefile exports your current host `UID`/`GID` so Docker can write to
+the bind-mounted `offchain/feeder/state/` tree without leaving it
+read-only to the daemon.
 
 ### Daemon only
 
@@ -106,8 +109,8 @@ make cli CMD="settle"
 make cli CMD="pair:burn --symbol BTC/USD"
 make cli CMD="pair:dedup --symbol BTC/USD"
 
-# Inspect files inside the artefacts volume.
-docker compose --profile cli run --rm --entrypoint sh cli -c "ls -R /artifacts"
+# Inspect the shared state tree inside the container.
+docker compose -f feeder/docker-compose.yml --project-directory feeder --profile cli run --rm --entrypoint sh cli -c "ls -R /app/state"
 ```
 
 ### One-shot full bootstrap
@@ -141,15 +144,14 @@ make cli CMD="reference-scripts:publish-client"
 | --- | --- | --- | --- |
 | `./config/` | `/config` (ro) | feeder, cli | Modular YAML config |
 | `.env` | env_file | feeder, cli | Secrets + selectors |
-| `feeder-state-sqlite` | `/state` | feeder, cli | SQLite DB, scanner checkpoint, JSONL logs |
-| `feeder-artifacts` | `/artifacts` | feeder, cli | Protocol/client/pair JSON state files |
+| `./state/` | `/app/state` | feeder, cli | Bootstrap JSON, pair state, logs, checkpoint, SQLite DB |
 | `postgres-data` | (postgres svc) | postgres | Postgres data dir |
 | `grafana-data` | `/var/lib/grafana` | grafana | Dashboard and alert state |
 
 ## Prerequisites — one-time setup
 
 Before the feeder can submit Cardano transactions it needs two bootstrap
-artifacts produced by the CLI (see
+state files produced by the CLI (see
 [offchain/cli/README.md](../cli/README.md) for how to run the CLI
 bootstrap commands):
 
@@ -179,11 +181,15 @@ npm run feeder:dev -- init bootstrap --force
 npm run feeder:dev -- init client    --force
 ```
 
-`--clean` never deletes bootstrap artifacts — only feeder-generated
+Docker Compose bind-mounts `offchain/feeder/state/` into `/app/state`,
+so the container uses the exact same `state/<network>/...` tree you see
+locally in the repo.
+
+`--clean` never deletes bootstrap state files — only feeder-generated
 runtime state. Re-running `init` on an existing setup asks for
 confirmation before overwriting.
 
-If the feeder starts and a required artifact is missing it exits
+If the feeder starts and a required state file is missing it exits
 immediately with the exact `init` command needed to fix it.
 
 ## Usage
@@ -264,7 +270,7 @@ grep/filtering; they are stripped from console output.
 
 ### `--clean` — what gets deleted
 
-Deletes all files the feeder writes at runtime. CLI bootstrap artifacts
+Deletes all files the feeder writes at runtime. CLI bootstrap state files
 are never touched.
 
 | Deleted | Reason |
@@ -276,8 +282,8 @@ are never touched.
 
 | Never deleted | Why |
 |---|---|
-| `state/<network>/config-bootstrap.json` | CLI artifact (`config:bootstrap`) |
-| `state/<network>/clients/*.json` | CLI artifact (`receiver:bootstrap`) |
+| `state/<network>/config-bootstrap.json` | CLI state file (`config:bootstrap`) |
+| `state/<network>/clients/*.json` | CLI state file (`receiver:bootstrap`) |
 
 ## Log streams
 

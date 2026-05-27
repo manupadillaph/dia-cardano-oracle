@@ -2,6 +2,10 @@
 # All targets delegate to docker compose running from offchain/feeder/.
 
 COMPOSE := docker compose -f feeder/docker-compose.yml --project-directory feeder
+UID ?= $(shell id -u)
+GID ?= $(shell id -g)
+export UID
+export GID
 
 .PHONY: help
 help: ## Show this help
