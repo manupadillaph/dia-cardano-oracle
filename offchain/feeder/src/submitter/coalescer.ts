@@ -186,18 +186,64 @@ export function createCoalescerManager(options: CoalescerOptions): CoalescerMana
     );
   }
 
+  function formatDurationMs(ms: number): string {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1_000));
+    const days = Math.floor(totalSeconds / 86_400);
+    const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+    const minutes = Math.floor((totalSeconds % 3_600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const parts: string[] = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(" ");
+  }
+
+  function buildIntentAgedOutError(req: SubmitRequest, nowMs: number, maxAgeMs: number): {
+    error: Error;
+    remediation: string;
+  } {
+    const intentTimestampMs = Number(req.enriched.fullIntent.timestamp) * 1_000;
+    const ageMs = Math.max(0, nowMs - intentTimestampMs);
+    const exceedsByMs = Math.max(0, ageMs - maxAgeMs);
+    const intentIso = new Date(intentTimestampMs).toISOString();
+    const nowIso = new Date(nowMs).toISOString();
+    const ageText = formatDurationMs(ageMs);
+    const maxAgeText = formatDurationMs(maxAgeMs);
+    const exceedsByText = formatDurationMs(exceedsByMs);
+
+    return {
+      error: new Error(
+        "Buffered intent exceeded max_intent_age before the lane flushed. " +
+        `intent_time=${intentIso} now=${nowIso} intent_age=${ageText} ` +
+        `max_intent_age=${maxAgeText} exceeds_by=${exceedsByText}.`,
+      ),
+      remediation:
+        `The buffered intent was already ${ageText} old when the lane flushed, ` +
+        `which is ${exceedsByText} beyond max_intent_age (${maxAgeText}). ` +
+        "The next fresh intent for this symbol will be processed automatically. " +
+        "If many intents fail this way, the feeder is likely catching up from " +
+        "an old checkpoint; restart with --clean --from-latest for new-only flow, " +
+        "or reseed with --from-block for a controlled backfill.",
+    };
+  }
+
   async function reportAgedOutRequests(requests: SubmitRequest[]): Promise<void> {
-    const error = new Error("Buffered intent exceeded max_intent_age before the lane flushed.");
+    if (!maxIntentAgeMs) {
+      return;
+    }
+    const nowMs = clock();
     for (const req of requests) {
+      const { error, remediation } = buildIntentAgedOutError(req, nowMs, maxIntentAgeMs);
       await onResult?.(
         {
           ok: false,
           intentHash: req.intentHash,
           error,
           code: "IntentAgedOut",
-          remediation:
-            "The intent sat in the lane buffer for too long and was skipped. " +
-            "The next fresh intent for this symbol will be processed automatically.",
+          remediation,
         },
         req,
       );

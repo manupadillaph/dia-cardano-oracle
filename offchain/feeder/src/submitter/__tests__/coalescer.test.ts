@@ -198,4 +198,57 @@ describe("createCoalescerManager", () => {
       ["h5"],
     ]);
   });
+
+  it("includes intent and current timestamps when a buffered intent ages out", async () => {
+    const results: SubmitResult[] = [];
+    const queueManager: QueueManager = {
+      async submit(request) {
+        return okResult(request, "single-tx");
+      },
+      async submitBatch(requests) {
+        return requests.map((request) => okResult(request));
+      },
+      queueKeys() {
+        return [];
+      },
+      totalPending() {
+        return 0;
+      },
+    };
+
+    const nowMs = Date.parse("2026-05-27T06:13:57.000Z");
+    const intentTimestampMs = Date.parse("2026-05-27T05:57:52.000Z");
+    const intentTimestampSec = BigInt(Math.floor(intentTimestampMs / 1_000));
+
+    const coalescer = createCoalescerManager({
+      queueManager,
+      coalesceWindowMs: 0,
+      maxIntentAgeMs: 15 * 60 * 1_000,
+      now: () => nowMs,
+      onResult: async (result) => {
+        results.push(result);
+      },
+    });
+
+    const agedRequest: SubmitRequest = {
+      ...makeRequest("old-intent", "BTC/USD"),
+      enriched: makeEnriched("BTC/USD", intentTimestampSec),
+    };
+
+    coalescer.accept(agedRequest);
+
+    await waitForFlush();
+
+    assert.equal(results.length, 1);
+    assert.equal(results[0]?.ok, false);
+    assert.equal(results[0]?.code, "IntentAgedOut");
+    assert.match(
+      results[0]!.error.message,
+      /intent_time=2026-05-27T05:57:52\.000Z now=2026-05-27T06:13:57\.000Z intent_age=16m 5s max_intent_age=15m exceeds_by=1m 5s\./,
+    );
+    assert.match(
+      results[0]!.remediation,
+      /restart with --clean --from-latest for new-only flow, or reseed with --from-block for a controlled backfill\./,
+    );
+  });
 });
