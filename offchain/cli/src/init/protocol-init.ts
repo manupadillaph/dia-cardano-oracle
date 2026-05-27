@@ -1,7 +1,7 @@
 import { input as promptInput } from "@inquirer/prompts";
 
 import { toBigInt } from "../core/chain-helpers.js";
-import { getCliConfig } from "../core/config.js";
+import { getCliConfig, requireDiaSourceConfig } from "../core/config.js";
 import {
   deriveCompressedPublicKeyFromPrivateKey,
   normalizeEthereumAddressHex,
@@ -54,7 +54,9 @@ function defaultProtocolConfigInput(
   defaultSigner: string,
   walletAddress: string,
 ): ProtocolInitConfigInput {
-  const { dia, diaEvmPrivateKey } = getCliConfig();
+  const cliConfig = getCliConfig();
+  const dia = requireDiaSourceConfig(cliConfig);
+  const { diaEvmPrivateKey } = cliConfig;
   const defaultAuthorizedDiaPublicKeys = diaEvmPrivateKey
     ? [deriveCompressedPublicKeyFromPrivateKey(diaEvmPrivateKey)]
     : [];

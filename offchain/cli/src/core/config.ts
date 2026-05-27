@@ -15,7 +15,7 @@ export type DiaSourceConfig = {
   rpcUrl: string;
   wsUrl: string;
   registryAddress: string;
-  explorerUrl: string;
+  explorerUrl: string | null;
   domainName: string;
   domainVersion: string;
 };
@@ -31,7 +31,7 @@ export type CliConfig = {
   cardanoPrivateKey: string | null;
   diaEvmPrivateKey: string | null;
   diaWsCredential: string | null;
-  dia: DiaSourceConfig;
+  dia: DiaSourceConfig | null;
 };
 
 // All per-network env vars live in offchain/cli/.env with suffix
@@ -52,6 +52,40 @@ function requireNetworkEnv(suffix: NetworkSuffix, baseName: string): string {
     );
   }
   return value;
+}
+
+function resolveOptionalDiaSourceConfig(suffix: NetworkSuffix): DiaSourceConfig | null {
+  const requiredNames = [
+    "DIA_SOURCE_CHAIN_ID",
+    "DIA_RPC_URL",
+    "DIA_WS_URL",
+    "DIA_REGISTRY_ADDRESS",
+  ] as const;
+  const values = requiredNames.map((name) => [name, pickNetworkEnv(suffix, name)] as const);
+  const present = values.filter(([, value]) => value !== null);
+
+  if (present.length === 0) {
+    return null;
+  }
+
+  const missing = values
+    .filter(([, value]) => value === null)
+    .map(([name]) => `${name}_${suffix}`);
+  if (missing.length > 0) {
+    throw new Error(
+      `Incomplete DIA source environment block for ${suffix}. Missing: ${missing.join(", ")}.`,
+    );
+  }
+
+  return {
+    sourceChainId: requireNetworkEnv(suffix, "DIA_SOURCE_CHAIN_ID"),
+    rpcUrl: requireNetworkEnv(suffix, "DIA_RPC_URL"),
+    wsUrl: requireNetworkEnv(suffix, "DIA_WS_URL"),
+    registryAddress: requireNetworkEnv(suffix, "DIA_REGISTRY_ADDRESS"),
+    explorerUrl: pickNetworkEnv(suffix, "DIA_EXPLORER_URL"),
+    domainName: process.env.DIA_DOMAIN_NAME?.trim() || "DIA Oracle",
+    domainVersion: process.env.DIA_DOMAIN_VERSION?.trim() || "1.0",
+  };
 }
 
 function requireSupportedNetwork(value: string): CardanoNetwork {
@@ -87,16 +121,17 @@ export function getCliConfig(): CliConfig {
     cardanoPrivateKey: pickNetworkEnv(suffix, "CARDANO_PRIVATE_KEY"),
     diaEvmPrivateKey: pickNetworkEnv(suffix, "DIA_EVM_PRIVATE_KEY"),
     diaWsCredential: pickNetworkEnv(suffix, "DIA_WS_CREDENTIAL"),
-    dia: {
-      sourceChainId: requireNetworkEnv(suffix, "DIA_SOURCE_CHAIN_ID"),
-      rpcUrl: requireNetworkEnv(suffix, "DIA_RPC_URL"),
-      wsUrl: requireNetworkEnv(suffix, "DIA_WS_URL"),
-      registryAddress: requireNetworkEnv(suffix, "DIA_REGISTRY_ADDRESS"),
-      explorerUrl: requireNetworkEnv(suffix, "DIA_EXPLORER_URL"),
-      domainName: process.env.DIA_DOMAIN_NAME?.trim() || "DIA Oracle",
-      domainVersion: process.env.DIA_DOMAIN_VERSION?.trim() || "1.0",
-    },
+    dia: resolveOptionalDiaSourceConfig(suffix),
   };
+}
+
+export function requireDiaSourceConfig(config: CliConfig): DiaSourceConfig {
+  if (config.dia) {
+    return config.dia;
+  }
+  throw new Error(
+    "Missing DIA source environment block for the active network. Set DIA_SOURCE_CHAIN_ID_*, DIA_RPC_URL_*, DIA_WS_URL_*, DIA_REGISTRY_ADDRESS_*, and DIA_EXPLORER_URL_* before running CLI flows that create DIA intents or initialize protocol domain settings.",
+  );
 }
 
 // Variant of `getCliConfig()` that resolves the per-network block for a
@@ -112,7 +147,7 @@ export function getDiaSourceConfigFor(suffix: NetworkSuffix): DiaSourceConfig & 
     rpcUrl: requireNetworkEnv(suffix, "DIA_RPC_URL"),
     wsUrl: requireNetworkEnv(suffix, "DIA_WS_URL"),
     registryAddress: requireNetworkEnv(suffix, "DIA_REGISTRY_ADDRESS"),
-    explorerUrl: requireNetworkEnv(suffix, "DIA_EXPLORER_URL"),
+    explorerUrl: pickNetworkEnv(suffix, "DIA_EXPLORER_URL"),
     domainName: process.env.DIA_DOMAIN_NAME?.trim() || "DIA Oracle",
     domainVersion: process.env.DIA_DOMAIN_VERSION?.trim() || "1.0",
     evmPrivateKey: pickNetworkEnv(suffix, "DIA_EVM_PRIVATE_KEY"),

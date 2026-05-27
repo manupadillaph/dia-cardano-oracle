@@ -305,9 +305,9 @@ This is the client funding step. The Receiver was bootstrapped with `balanceLove
 
 ```sh
 npm run cli -- receiver:top-up \
-  --amount-lovelace 5000000 \
-  --protocol-state ./state/<network>/config-bootstrap.json \
-  --state ./state/<network>/clients/client-a.json
+  --amount-lovelace 100000000 \
+  --protocol-state ./state/preview_run_20260516-090057/config-bootstrap.json \
+  --state ./state/preview_run_20260516-090057/clients/client-a.json
 ```
 
 ## Oracle Intent Flow

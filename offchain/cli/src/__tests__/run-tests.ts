@@ -17,6 +17,7 @@ import {
   signDiaOracleIntentInput,
   assertDiaOracleIntentNotExpired,
 } from "../core/dia-intent.js";
+import { getCliConfig } from "../core/config.js";
 import { createEthereumWallet } from "../oracle/ethereum-wallet-create.js";
 import { createWallet } from "../wallet/wallet-create.js";
 import {
@@ -71,6 +72,7 @@ import { buildPairApplyUpdateRedeemer } from "../core/redeemers.js";
 
 testCardanoWalletCreate();
 testEthereumWalletCreate();
+testCliConfigAllowsCardanoOnlyModeWithoutDiaSourceEnv();
 testIntentSigning();
 testBatchSnapshotRefresh();
 testCompatibleBatchRules();
@@ -124,9 +126,9 @@ console.log("CLI tests passed");
 function testCardanoWalletCreate(): void {
   const originalNetwork = process.env.CARDANO_NETWORK;
   try {
-    for (const [network, addressPrefix] of [
-      ["Preview", "addr_test1"],
-      ["Mainnet", "addr1"],
+    for (const [network, addressPrefix, walletSeedVar] of [
+      ["Preview", "addr_test1", "CARDANO_WALLET_SEED_TESTNET"],
+      ["Mainnet", "addr1", "CARDANO_WALLET_SEED_MAINNET"],
     ] as const) {
       process.env.CARDANO_NETWORK = network;
       const wallet = createWallet();
@@ -137,7 +139,7 @@ function testCardanoWalletCreate(): void {
       );
       assertHexString(wallet.paymentKeyHash);
       assert.equal(wallet.paymentKeyHash.length, 56);
-      assert.equal(wallet.env.CARDANO_WALLET_SEED, wallet.mnemonic);
+      assert.equal(wallet.env[walletSeedVar], wallet.mnemonic);
       assert.equal(wallet.env.CARDANO_NETWORK, network);
     }
   } finally {
@@ -150,12 +152,59 @@ function testCardanoWalletCreate(): void {
 }
 
 function testEthereumWalletCreate(): void {
-  const wallet = createEthereumWallet();
-  assertHexString(wallet.privateKey);
-  assertHexString(wallet.publicKey);
-  assert.equal(wallet.publicKey.length, 66);
-  assert.equal(wallet.env.DIA_EVM_PRIVATE_KEY, wallet.privateKey);
-  assert(wallet.address.startsWith("0x"));
+  const originalNetwork = process.env.CARDANO_NETWORK;
+  try {
+    for (const [network, evmKeyVar] of [
+      ["Preview", "DIA_EVM_PRIVATE_KEY_TESTNET"],
+      ["Mainnet", "DIA_EVM_PRIVATE_KEY_MAINNET"],
+    ] as const) {
+      process.env.CARDANO_NETWORK = network;
+      const wallet = createEthereumWallet();
+      assertHexString(wallet.privateKey);
+      assertHexString(wallet.publicKey);
+      assert.equal(wallet.publicKey.length, 66);
+      assert.equal(wallet.env[evmKeyVar], wallet.privateKey);
+      assert(wallet.address.startsWith("0x"));
+    }
+  } finally {
+    if (originalNetwork === undefined) {
+      delete process.env.CARDANO_NETWORK;
+    } else {
+      process.env.CARDANO_NETWORK = originalNetwork;
+    }
+  }
+}
+
+function testCliConfigAllowsCardanoOnlyModeWithoutDiaSourceEnv(): void {
+  const keys = [
+    "DIA_SOURCE_CHAIN_ID_TESTNET",
+    "DIA_RPC_URL_TESTNET",
+    "DIA_WS_URL_TESTNET",
+    "DIA_REGISTRY_ADDRESS_TESTNET",
+    "DIA_EXPLORER_URL_TESTNET",
+  ] as const;
+  const original = new Map(keys.map((key) => [key, process.env[key]] as const));
+
+  try {
+    for (const key of keys) {
+      delete process.env[key];
+    }
+
+    const config = getCliConfig();
+    assert.equal(config.cardanoNetwork, "Preview");
+    assert.equal(config.networkSuffix, "TESTNET");
+    assert.equal(config.dia, null);
+    assert.equal(typeof config.blockfrostApiUrl, "string");
+    assert.equal(typeof config.koiosApiUrl, "string");
+  } finally {
+    for (const [key, value] of original.entries()) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 function testIntentSigning(): void {
@@ -346,8 +395,9 @@ function testProtocolStateInit(): void {
   assert.equal(state.bootstrapRefs.config.txHash, "");
   assert.equal(state.referenceScripts?.global?.config.txHash, "");
   assert.equal(state.configState.validConfigSigners.length, 1);
-  const expectedAuthorizedDiaPublicKey = process.env.DIA_EVM_PRIVATE_KEY?.trim()
-    ? deriveCompressedPublicKeyFromPrivateKey(process.env.DIA_EVM_PRIVATE_KEY)
+  const diaEvmPrivateKey = getCliConfig().diaEvmPrivateKey;
+  const expectedAuthorizedDiaPublicKey = diaEvmPrivateKey
+    ? deriveCompressedPublicKeyFromPrivateKey(diaEvmPrivateKey)
     : "03aafe60df69602d2600363bf9830b9ba09f199e7c1c1bda7c0be88a3ed341b807";
   assert.equal(state.configState.authorizedDiaPublicKeys[0], expectedAuthorizedDiaPublicKey);
   assert.equal(state.configState.domain.name, "DIA Oracle");
